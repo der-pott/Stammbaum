@@ -4,6 +4,8 @@ node_modules/
 *.db
 .swarm/
 .claude-flow/
+agentdb.rvf
+agentdb.rvf.lock
 .env
 .env.*
 !.env.example
