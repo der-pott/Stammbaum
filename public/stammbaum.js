@@ -364,11 +364,13 @@ function fitTree() {
   const canvas = document.getElementById('tree-canvas');
   const cw = canvas.clientWidth, ch = canvas.clientHeight;
   if (!cw || !ch) { requestAnimationFrame(fitTree); return; }
+  // Reserve top band for title chrome
+  const topPad = window.innerWidth < 820 ? 110 : 90;
   const sx = cw / state.layout.totalW;
-  const sy = ch / state.layout.totalH;
-  state.pz.k = Math.min(sx, sy, 1) * 0.92;
+  const sy = (ch - topPad) / state.layout.totalH;
+  state.pz.k = Math.min(sx, sy, 1) * 0.95;
   state.pz.x = (cw - state.layout.totalW * state.pz.k) / 2;
-  state.pz.y = (ch - state.layout.totalH * state.pz.k) / 2;
+  state.pz.y = topPad + (ch - topPad - state.layout.totalH * state.pz.k) / 2;
   renderTree();
 }
 
