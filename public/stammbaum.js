@@ -364,11 +364,10 @@ function fitTree() {
   const canvas = document.getElementById('tree-canvas');
   const cw = canvas.clientWidth, ch = canvas.clientHeight;
   if (!cw || !ch) { requestAnimationFrame(fitTree); return; }
-  // Reserve top band for title chrome
   const topPad = window.innerWidth < 820 ? 110 : 90;
   const sx = cw / state.layout.totalW;
   const sy = (ch - topPad) / state.layout.totalH;
-  state.pz.k = Math.min(sx, sy, 1) * 0.95;
+  state.pz.k = Math.max(0.1, Math.min(sx, sy, 1) * 0.95);
   state.pz.x = (cw - state.layout.totalW * state.pz.k) / 2;
   state.pz.y = topPad + (ch - topPad - state.layout.totalH * state.pz.k) / 2;
   renderTree();
@@ -529,7 +528,7 @@ function setupPanZoom() {
     const px = ev.clientX - rect.left;
     const py = ev.clientY - rect.top;
     const scale = Math.exp(-ev.deltaY * 0.002);
-    const newK = Math.max(0.2, Math.min(3, state.pz.k * scale));
+    const newK = Math.max(0.1, Math.min(3, state.pz.k * scale));
     const ratio = newK / state.pz.k;
     state.pz.x = px - (px - state.pz.x) * ratio;
     state.pz.y = py - (py - state.pz.y) * ratio;
@@ -560,7 +559,7 @@ function setupPanZoom() {
 function zoomBy(f) {
   const canvas = document.getElementById('tree-canvas');
   const cx = canvas.clientWidth / 2, cy = canvas.clientHeight / 2;
-  const newK = Math.max(0.2, Math.min(3, state.pz.k * f));
+  const newK = Math.max(0.1, Math.min(3, state.pz.k * f));
   const ratio = newK / state.pz.k;
   state.pz.x = cx - (cx - state.pz.x) * ratio;
   state.pz.y = cy - (cy - state.pz.y) * ratio;
