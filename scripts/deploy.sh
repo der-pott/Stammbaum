@@ -11,5 +11,10 @@ if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
 fi
 
 git push origin master
-ssh "$HOST" "cd $REMOTE && git pull --ff-only origin master && docker compose up -d"
+ssh "$HOST" "cd $REMOTE && git pull --ff-only origin master"
+if [[ "${1:-}" == "--api" ]]; then
+  ssh "$HOST" "cd $REMOTE && docker compose up -d --build api"
+else
+  ssh "$HOST" "cd $REMOTE && docker compose up -d"
+fi
 echo "Deployed."

@@ -4,19 +4,78 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Stammbaum</title>
-  <style>
-    html,body{margin:0;background:#0f1115;color:#e7e9ee;font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
-    main{max-width:640px;margin:12vh auto;padding:0 24px}
-    h1{font-size:2rem;margin:0 0 .5rem}
-    p{color:#9aa3b2}
-    code{background:#1b1f27;padding:2px 6px;border-radius:4px}
-  </style>
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<main>
+<header>
   <h1>Stammbaum</h1>
-  <p>Skelett läuft. Inhalt folgt.</p>
-  <p><code>stammbaum.p-m-pott.de</code></p>
+  <nav>
+    <button id="btn-add-person">+ Person</button>
+    <button id="btn-add-edge">+ Beziehung</button>
+    <button id="btn-reload">↻</button>
+  </nav>
+</header>
+
+<main>
+  <aside id="list-panel">
+    <input id="search" placeholder="Suchen…" autocomplete="off">
+    <ul id="person-list"></ul>
+  </aside>
+
+  <section id="tree-panel">
+    <svg id="tree" xmlns="http://www.w3.org/2000/svg"></svg>
+  </section>
+
+  <aside id="detail-panel">
+    <div id="detail-empty">Keine Person ausgewählt.</div>
+    <div id="detail" hidden></div>
+  </aside>
 </main>
+
+<dialog id="person-dialog">
+  <form method="dialog" id="person-form">
+    <h2 id="person-dialog-title">Person</h2>
+    <label>Vorname <input name="given_name" maxlength="200"></label>
+    <label>Nachname <input name="surname" maxlength="200"></label>
+    <label>Geburtsname <input name="birth_name" maxlength="200"></label>
+    <label>Geschlecht
+      <select name="gender">
+        <option value="">—</option>
+        <option value="m">männlich</option>
+        <option value="f">weiblich</option>
+        <option value="x">divers</option>
+      </select>
+    </label>
+    <label>Geburt <input name="birth_date" placeholder="JJJJ-MM-TT oder frei"></label>
+    <label>Geburtsort <input name="birth_place"></label>
+    <label>Tod <input name="death_date" placeholder="JJJJ-MM-TT oder frei"></label>
+    <label>Sterbeort <input name="death_place"></label>
+    <label>Notizen <textarea name="notes" rows="3" maxlength="500"></textarea></label>
+    <menu>
+      <button type="button" data-close>Abbrechen</button>
+      <button type="submit">Speichern</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="edge-dialog">
+  <form method="dialog" id="edge-form">
+    <h2>Beziehung anlegen</h2>
+    <label>Typ
+      <select name="type">
+        <option value="parent">Elternteil → Kind</option>
+        <option value="spouse">Ehepartner (beidseitig)</option>
+      </select>
+    </label>
+    <label>Von <select name="from_id"></select></label>
+    <label>Zu  <select name="to_id"></select></label>
+    <menu>
+      <button type="button" data-close>Abbrechen</button>
+      <button type="submit">Speichern</button>
+    </menu>
+  </form>
+</dialog>
+
+<script src="stammbaum.js" defer></script>
 </body>
 </html>

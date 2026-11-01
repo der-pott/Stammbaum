@@ -1,14 +1,40 @@
 # Stammbaum
 
-Statische Seite unter `stammbaum.p-m-pott.de`, serviert von nginx im Docker-Container.
+Familien-Stammbaum mit optionaler KI-Ahnenforschung. Erreichbar unter `stammbaum.p-m-pott.de`.
+
+## Features
+
+- Personenverwaltung (Namen, Daten, Geburts-/Sterbeort, Notizen)
+- Beziehungen: Eltern → Kind, Ehepartner
+- Automatische Stammbaum-Visualisierung (SVG, Generationen-Layout)
+- KI-Research-Endpunkt (Stub; LLM-Anbindung folgt via `ANTHROPIC_API_KEY`)
 
 ## Struktur
 
-- `public/` — statische Seiten
-- `web/default.conf` — nginx-Konfig mit Cache-Headern
-- `compose.yaml` — nginx-Container im `platform_proxy`-Netz
-- `deploy/stammbaum.caddy` — Caddy-Site für den VPS
-- `scripts/deploy.sh` — Push + VPS-Pull + Container-Reload
+- `public/` — Frontend (statisch, kein Build-Step)
+- `web/default.conf` — nginx-Cache-Konfig
+- `api/` — Node/Express + SQLite (persons, edges, ai_runs)
+- `compose.yaml` — nginx + api im `platform_proxy`-Netz
+- `deploy/stammbaum.caddy` — Caddy-Site (routet `/api/*` zur API)
+- `scripts/deploy.sh` — Push + VPS-Pull + Container-Reload (`--api` erzwingt Build)
+- `data/` — SQLite-Volume (ignoriert, lebt auf dem VPS)
+
+## API
+
+```
+GET    /api/health
+GET    /api/persons
+POST   /api/persons             { given_name, surname, gender, birth_date, ... }
+GET    /api/persons/:id
+PATCH  /api/persons/:id
+DELETE /api/persons/:id
+GET    /api/edges
+POST   /api/edges               { from_id, to_id, type: parent|spouse, since?, until? }
+DELETE /api/edges/:id
+GET    /api/tree                { persons, edges }
+POST   /api/ai/research         { person_id, prompt? }
+GET    /api/ai/runs/:person_id
+```
 
 ## Lokal
 

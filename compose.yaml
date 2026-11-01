@@ -9,6 +9,18 @@ services:
       - ./public:/usr/share/nginx/html:ro
       - ./web/default.conf:/etc/nginx/conf.d/default.conf:ro
 
+  api:
+    build: ./api
+    image: stammbaum-api:latest
+    container_name: stammbaum-api
+    restart: unless-stopped
+    networks:
+      - platform_proxy
+    environment:
+      DB_PATH: /data/stammbaum.db
+    volumes:
+      - ./data:/data
+
 networks:
   platform_proxy:
     external: true
