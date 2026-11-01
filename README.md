@@ -27,7 +27,7 @@ Erstmaliges Setup auf VPS (einmalig):
 ssh vps 'sudo mkdir -p /srv/projects/stammbaum && sudo chown maxadmin: /srv/projects/stammbaum'
 ssh vps 'git clone https://github.com/der-pott/Stammbaum.git /srv/projects/stammbaum'
 scp deploy/stammbaum.caddy vps:/tmp/
-ssh vps 'sudo mv /tmp/stammbaum.caddy /srv/platform/caddy/sites/ && sudo docker exec caddy caddy reload --config /etc/caddy/Caddyfile'
+ssh vps 'sudo mv /tmp/stammbaum.caddy /srv/platform/caddy/sites/ && sudo docker exec platform-caddy caddy reload --config /etc/caddy/Caddyfile'
 ssh vps 'cd /srv/projects/stammbaum && docker compose up -d'
 ```
 
