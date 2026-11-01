@@ -245,13 +245,14 @@ app.post('/api/ai/research', requireEditor, aiLimiter, async (req, res) => {
   const runId = newId();
   const started = nowIso();
   const extraPrompt = String(prompt || '').slice(0, 2000);
+  const known = loadKnownRelations(person_id);
 
   db.prepare(`INSERT INTO ai_runs (id, person_id, prompt, model, response, status, created_at, completed_at)
     VALUES (?,?,?,?,?,?,?,?)`)
     .run(runId, person_id, extraPrompt, 'claude-opus-4-7', null, 'running', started, null);
 
   try {
-    const result = await runResearch(anthropic, person, extraPrompt);
+    const result = await runResearch(anthropic, person, extraPrompt, known);
     db.prepare(`UPDATE ai_runs SET model=?, response=?, status='completed', prompt=?, completed_at=? WHERE id=?`)
       .run(result.model, JSON.stringify({ data: result.data, raw: result.raw, usage: result.usage }), result.userPrompt, nowIso(), runId);
     logAudit(req.auth.role, 'ai.research.ok', person_id);
@@ -280,6 +281,53 @@ app.get('/api/ai/runs/:person_id', requireViewer, (req, res) => {
     .all(req.params.person_id);
   res.json(rows);
 });
+
+// Letzter erfolgreicher Research-Lauf mit geparstem Ergebnis — fürs Frontend,
+// damit nicht bei jedem Person-Klick neu angefragt werden muss.
+app.get('/api/ai/runs/:person_id/latest', requireViewer, (req, res) => {
+  const row = db.prepare(`SELECT id, model, response, created_at, completed_at
+    FROM ai_runs WHERE person_id=? AND status='completed' ORDER BY completed_at DESC LIMIT 1`)
+    .get(req.params.person_id);
+  if (!row) return res.status(404).json({ error: 'no completed run' });
+  let data = null, usage = null;
+  try {
+    const parsed = JSON.parse(row.response || '{}');
+    data = parsed.data || null;
+    usage = parsed.usage || null;
+  } catch (_) {}
+  res.json({
+    id: row.id, model: row.model, created_at: row.created_at,
+    completed_at: row.completed_at, data, usage,
+  });
+});
+
+function loadKnownRelations(personId) {
+  // parent-Edges: Elternteil (from_id) -> Kind (to_id). Also hole:
+  //  parents: alle Edges wo to_id = person_id
+  //  children: alle Edges wo from_id = person_id, type=parent
+  //  spouses: alle Edges wo person_id in from/to und type=spouse
+  //  siblings: andere Kinder von meinen Eltern (ohne mich selbst)
+  const sel = db.prepare('SELECT * FROM persons WHERE id=?');
+  const parentRows = db.prepare(`SELECT from_id FROM edges WHERE to_id=? AND type='parent'`).all(personId);
+  const parents = parentRows.map(r => sel.get(r.from_id)).filter(Boolean);
+  const childRows = db.prepare(`SELECT to_id FROM edges WHERE from_id=? AND type='parent'`).all(personId);
+  const children = childRows.map(r => sel.get(r.to_id)).filter(Boolean);
+  const spouseRows = db.prepare(`SELECT from_id, to_id FROM edges WHERE type='spouse' AND (from_id=? OR to_id=?)`).all(personId, personId);
+  const spouses = spouseRows.map(r => sel.get(r.from_id === personId ? r.to_id : r.from_id)).filter(Boolean);
+
+  const siblings = [];
+  const siblingIds = new Set();
+  for (const p of parents) {
+    const otherKids = db.prepare(`SELECT to_id FROM edges WHERE from_id=? AND type='parent' AND to_id != ?`).all(p.id, personId);
+    for (const r of otherKids) {
+      if (siblingIds.has(r.to_id)) continue;
+      siblingIds.add(r.to_id);
+      const s = sel.get(r.to_id);
+      if (s) siblings.push(s);
+    }
+  }
+  return { parents, spouses, children, siblings };
+}
 
 /* gedcom import --------------------------------------------------------- */
 // Write operation.  When auth lands, wrap this route in the editor-role guard.
