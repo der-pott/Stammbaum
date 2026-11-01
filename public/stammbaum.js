@@ -378,16 +378,18 @@ function computeLayout() {
   return { nodes, links, posById, totalW: maxX + marginR, totalH: maxYpx, minY, maxY, pxPerYear, marginL, marginT };
 }
 
-function fitTree() {
+function fitTree(opts = {}) {
   state.layout = computeLayout();
   if (!state.layout) return;
   const canvas = document.getElementById('tree-canvas');
   const cw = canvas.clientWidth, ch = canvas.clientHeight;
-  if (!cw || !ch) { requestAnimationFrame(fitTree); return; }
+  if (!cw || !ch) { requestAnimationFrame(() => fitTree(opts)); return; }
   const topPad = window.innerWidth < 820 ? 110 : 90;
   const sx = cw / state.layout.totalW;
   const sy = (ch - topPad) / state.layout.totalH;
-  state.pz.k = Math.max(0.1, Math.min(sx, sy, 1) * 0.95);
+  // Default fit: aim for readable zoom; allow pan. "all" variant shows entire tree.
+  const target = Math.min(sx, sy, 1) * 0.95;
+  state.pz.k = opts.all ? Math.max(0.1, target) : Math.max(target, 0.65);
   state.pz.x = (cw - state.layout.totalW * state.pz.k) / 2;
   state.pz.y = topPad + (ch - topPad - state.layout.totalH * state.pz.k) / 2;
   renderTree();
@@ -581,7 +583,7 @@ function setupPanZoom() {
 
   document.getElementById('btn-zoom-in').onclick = () => zoomBy(1.3);
   document.getElementById('btn-zoom-out').onclick = () => zoomBy(1 / 1.3);
-  document.getElementById('btn-zoom-fit').onclick = () => fitTree();
+  document.getElementById('btn-zoom-fit').onclick = () => fitTree({ all: true });
 }
 function zoomBy(f) {
   const canvas = document.getElementById('tree-canvas');
