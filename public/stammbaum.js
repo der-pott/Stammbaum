@@ -98,12 +98,13 @@ function toggleTheme() {
 /* --- Data load ------------------------------------------------------ */
 async function reload() {
   const t = await api.tree();
+  const firstLoad = !state.persons.length;
   state.persons = t.persons;
   state.edges = t.edges;
   const h = parseHash();
   if (h && state.persons.some(p => p.id === h)) state.selected = h;
   render();
-  if (!state.layout) fitTree();
+  if (firstLoad) requestAnimationFrame(fitTree);
 }
 
 /* --- Auth ----------------------------------------------------------- */
