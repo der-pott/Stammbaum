@@ -1,0 +1,6 @@
+.DS_Store
+data/
+node_modules/
+*.db
+.swarm/
+.claude-flow/

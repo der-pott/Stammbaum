@@ -1,0 +1,8 @@
+# stammbaum.p-m-pott.de — Cloudflare Proxy (HTTP only)
+# Static pages: /srv/projects/stammbaum/public  →  stammbaum-web (nginx)
+stammbaum.p-m-pott.de:80 {
+    encode gzip zstd
+    handle {
+        reverse_proxy stammbaum-web:80
+    }
+}
