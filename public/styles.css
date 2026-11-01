@@ -20,11 +20,22 @@ header {
   padding: 10px 16px; border-bottom: 1px solid var(--border);
 }
 header h1 { margin: 0; font-size: 1.1rem; letter-spacing: 0.5px; }
+nav { display: flex; gap: 8px; align-items: center; }
 nav button, button {
   background: var(--panel); color: var(--text); border: 1px solid var(--border);
   padding: 6px 12px; border-radius: 6px; cursor: pointer; font: inherit;
 }
 button:hover { border-color: var(--accent); }
+.role-badge {
+  padding: 3px 10px; border-radius: 999px; font-size: 0.8em;
+  background: var(--panel); border: 1px solid var(--border); color: var(--muted);
+}
+.role-badge.editor { color: var(--accent); border-color: var(--accent); }
+.role-badge.viewer { color: var(--muted); }
+.login-error {
+  margin-top: 10px; padding: 8px 10px; border-radius: 6px;
+  background: #3a1a1a; border: 1px solid #5a2a2a; color: #ff8282; font-size: 0.9em;
+}
 
 main {
   display: grid; grid-template-columns: 260px 1fr 320px;

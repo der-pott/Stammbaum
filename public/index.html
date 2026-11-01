@@ -10,13 +10,16 @@
 <header>
   <h1>Stammbaum</h1>
   <nav>
-    <button id="btn-add-person">+ Person</button>
-    <button id="btn-add-edge">+ Beziehung</button>
-    <button id="btn-reload">↻</button>
+    <span id="role-badge" class="role-badge" hidden></span>
+    <button id="btn-add-person" data-editor hidden>+ Person</button>
+    <button id="btn-add-edge" data-editor hidden>+ Beziehung</button>
+    <button id="btn-import-gedcom" data-editor hidden>⬆ GEDCOM</button>
+    <button id="btn-reload" hidden>↻</button>
+    <button id="btn-logout" hidden>Logout</button>
   </nav>
 </header>
 
-<main>
+<main hidden id="app-main">
   <aside id="list-panel">
     <input id="search" placeholder="Suchen…" autocomplete="off">
     <ul id="person-list"></ul>
@@ -31,6 +34,25 @@
     <div id="detail" hidden></div>
   </aside>
 </main>
+
+<dialog id="login-dialog">
+  <form method="dialog" id="login-form">
+    <h2>Anmelden</h2>
+    <label>Rolle
+      <select name="role">
+        <option value="editor">Editor (Vollzugriff)</option>
+        <option value="viewer">Viewer (nur Lesen)</option>
+      </select>
+    </label>
+    <label>PIN
+      <input name="pin" type="password" autocomplete="current-password" required autofocus>
+    </label>
+    <div id="login-error" class="login-error" hidden></div>
+    <menu>
+      <button type="submit">Anmelden</button>
+    </menu>
+  </form>
+</dialog>
 
 <dialog id="person-dialog">
   <form method="dialog" id="person-form">
@@ -72,6 +94,19 @@
     <menu>
       <button type="button" data-close>Abbrechen</button>
       <button type="submit">Speichern</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="import-dialog">
+  <form method="dialog" id="import-form">
+    <h2>GEDCOM importieren</h2>
+    <p class="meta">Standardformat aus Ancestry, MyHeritage, Gramps, GEDitCOM. Max 2 MB. Personen und Beziehungen werden mit neuen IDs angelegt — kein Merge mit bestehenden Einträgen.</p>
+    <label>Datei <input name="file" type="file" accept=".ged,.gedcom,text/plain" required></label>
+    <div id="import-status" class="meta" hidden></div>
+    <menu>
+      <button type="button" data-close>Abbrechen</button>
+      <button type="submit">Importieren</button>
     </menu>
   </form>
 </dialog>

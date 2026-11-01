@@ -19,6 +19,27 @@ echo 'ANTHROPIC_API_KEY=sk-ant-api03-...' | ssh vps 'cat > /srv/projects/stammba
 
 Ohne Key liefert `/api/ai/research` 503. Rate-Limit: 10 Calls / Minute / IP.
 
+## Auth (PIN)
+
+Zwei Rollen: `editor` (voller Zugriff) und `viewer` (nur Lesen). Ohne Login
+liefert jede API-Route außer `/api/auth/*` und `/api/health` 401, das Frontend
+zeigt einen Login-Dialog.
+
+Erstes Setup auf dem VPS:
+
+```bash
+ssh vps 'cat >> /srv/projects/stammbaum/.env <<EOF
+SB_INIT_EDITOR_PIN=dein-editor-pin
+SB_INIT_VIEWER_PIN=dein-viewer-pin
+EOF'
+./scripts/deploy.sh --api
+```
+
+Beim ersten Container-Start werden die PINs scrypt-gehasht in der Tabelle `pins`
+abgelegt. Danach ignoriert der Service die Env-Werte — zum Ändern den jeweiligen
+Eintrag in `pins` löschen und neu deployen. Login-Rate-Limit: 5 Versuche /
+Minute / IP. Session-Cookie `sb_session` (HttpOnly, SameSite=strict, 30 Tage).
+
 ## Struktur
 
 - `public/` — Frontend (statisch, kein Build-Step)

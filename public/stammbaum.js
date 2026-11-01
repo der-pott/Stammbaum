@@ -11,18 +11,85 @@ const api = {
   async createEdge(data) { return j(await fetch('/api/edges', postJson(data))); },
   async removeEdge(id) { return j(await fetch(`/api/edges/${id}`, { method: 'DELETE' })); },
   async research(person_id) { return j(await fetch('/api/ai/research', postJson({ person_id }))); },
+  async importGedcom(file) {
+    return j(await fetch('/api/import/gedcom', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-gedcom' },
+      body: file,
+    }));
+  },
+  async me() {
+    const r = await fetch('/api/auth/me');
+    if (r.status === 401) return null;
+    if (!r.ok) throw new Error('auth-check fehlgeschlagen');
+    return r.json();
+  },
+  async login(role, pin) { return j(await fetch('/api/auth/login', postJson({ role, pin }))); },
+  async logout() { return j(await fetch('/api/auth/logout', { method: 'POST' })); },
 };
 function postJson(data) { return { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) }; }
 function patchJson(data) { return { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) }; }
-async function j(r) { if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText); return r.json(); }
+async function j(r) {
+  if (r.status === 401) { state.role = null; applyRole(); openLoginDialog(); throw new Error('Login erforderlich'); }
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+  return r.json();
+}
 
-const state = { persons: [], edges: [], selected: null, filter: '' };
+const state = { persons: [], edges: [], selected: null, filter: '', role: null };
 
 async function reload() {
   const t = await api.tree();
   state.persons = t.persons;
   state.edges = t.edges;
   render();
+}
+
+/* -------- role / auth gating -------- */
+
+function applyRole() {
+  const loggedIn = !!state.role;
+  document.getElementById('app-main').hidden = !loggedIn;
+  document.getElementById('btn-reload').hidden = !loggedIn;
+  document.getElementById('btn-logout').hidden = !loggedIn;
+  const badge = document.getElementById('role-badge');
+  badge.hidden = !loggedIn;
+  badge.className = 'role-badge ' + (state.role || '');
+  badge.textContent = state.role ? (state.role === 'editor' ? 'Editor' : 'Viewer') : '';
+  const canEdit = state.role === 'editor';
+  for (const el of document.querySelectorAll('[data-editor]')) el.hidden = !canEdit;
+}
+
+function openLoginDialog() {
+  const dlg = document.getElementById('login-dialog');
+  const form = document.getElementById('login-form');
+  const err = document.getElementById('login-error');
+  err.hidden = true; err.textContent = '';
+  form.pin.value = '';
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    err.hidden = true;
+    const role = form.role.value;
+    const pin = form.pin.value;
+    try {
+      const r = await api.login(role, pin);
+      state.role = r.role;
+      dlg.close();
+      applyRole();
+      await reload();
+    } catch (e) {
+      err.textContent = e.message;
+      err.hidden = false;
+    }
+  };
+  if (!dlg.open) dlg.showModal();
+}
+
+async function logout() {
+  try { await api.logout(); } catch (_) {}
+  state.role = null;
+  state.persons = []; state.edges = []; state.selected = null;
+  applyRole();
+  openLoginDialog();
 }
 
 /* -------- render -------- */
@@ -67,9 +134,9 @@ function computeLayout() {
   const edges = state.edges;
   if (!persons.length) return { nodes: [], links: [] };
 
-  const parentOf = new Map(); // child -> [parent]
-  const childOf = new Map();  // parent -> [child]
-  const spouses = new Map();  // id -> Set(ids)
+  const parentOf = new Map();
+  const childOf = new Map();
+  const spouses = new Map();
   for (const p of persons) { parentOf.set(p.id, []); childOf.set(p.id, []); spouses.set(p.id, new Set()); }
   for (const e of edges) {
     if (e.type === 'parent') {
@@ -81,11 +148,9 @@ function computeLayout() {
     }
   }
 
-  // generation per person: BFS from roots (no parents).
   const gen = new Map();
   const roots = persons.filter(p => parentOf.get(p.id).length === 0).map(p => p.id);
   const queue = roots.map(id => [id, 0]);
-  // Spouses inherit higher gen if partner is set.
   while (queue.length) {
     const [id, g] = queue.shift();
     if (gen.has(id) && gen.get(id) >= g) continue;
@@ -95,7 +160,6 @@ function computeLayout() {
   }
   for (const p of persons) if (!gen.has(p.id)) gen.set(p.id, 0);
 
-  // group by gen, sort within gen so spouses adjacent.
   const byGen = new Map();
   for (const p of persons) {
     const g = gen.get(p.id);
@@ -103,13 +167,11 @@ function computeLayout() {
     byGen.get(g).push(p);
   }
 
-  // simple sort: by surname first, then group spouses next to each other.
   const nodes = [];
   const rowH = 110, colW = 180, nodeW = 150, nodeH = 60;
   const genKeys = [...byGen.keys()].sort((a, b) => a - b);
   for (const g of genKeys) {
     const list = byGen.get(g).slice().sort((a, b) => (a.surname || '').localeCompare(b.surname || '') || (a.given_name || '').localeCompare(b.given_name || ''));
-    // Rebuild: put spouses next to each other.
     const placed = new Set(), ordered = [];
     for (const p of list) {
       if (placed.has(p.id)) continue;
@@ -142,7 +204,10 @@ function renderTree() {
   const { nodes, links } = computeLayout();
 
   if (!nodes.length) {
-    const t = text(40, 60, 'Noch keine Personen. Oben rechts „+ Person“ klicken.', { fill: '#9aa3b2' });
+    const hint = state.role === 'editor'
+      ? 'Noch keine Personen. Oben rechts „+ Person“ klicken.'
+      : 'Noch keine Personen.';
+    const t = text(40, 60, hint, { fill: '#9aa3b2' });
     svg.appendChild(t);
     return;
   }
@@ -153,7 +218,6 @@ function renderTree() {
   svg.setAttribute('viewBox', vb);
   svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
 
-  // links first
   for (const { e, a, b } of links) {
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.classList.add('edge', e.type);
@@ -164,8 +228,6 @@ function renderTree() {
       path.setAttribute('d', `M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`);
     } else {
       const y = (a.y + a.h / 2);
-      const x1 = Math.min(a.x + a.w, b.x);
-      const x2 = Math.max(a.x, b.x + b.w);
       path.setAttribute('d', `M${a.x + a.w / 2},${y} L${b.x + b.w / 2},${y}`);
     }
     svg.appendChild(path);
@@ -230,14 +292,16 @@ function renderDetail() {
   rel.appendChild(renderRelList('Kinder', children));
   el.appendChild(rel);
 
-  const actions = h('div', { class: 'actions' });
-  actions.appendChild(button('Bearbeiten', () => openPersonDialog(p)));
-  actions.appendChild(button('🤖 KI-Research', () => runResearch(p.id)));
-  actions.appendChild(button('Löschen', async () => {
-    if (!confirm(`${nameOf(p)} löschen?`)) return;
-    await api.remove(p.id); state.selected = null; await reload();
-  }));
-  el.appendChild(actions);
+  if (state.role === 'editor') {
+    const actions = h('div', { class: 'actions' });
+    actions.appendChild(button('Bearbeiten', () => openPersonDialog(p)));
+    actions.appendChild(button('🤖 KI-Research', () => runResearch(p.id)));
+    actions.appendChild(button('Löschen', async () => {
+      if (!confirm(`${nameOf(p)} löschen?`)) return;
+      await api.remove(p.id); state.selected = null; await reload();
+    }));
+    el.appendChild(actions);
+  }
 }
 
 function renderRelList(title, people) {
@@ -256,7 +320,6 @@ function renderRelList(title, people) {
 
 async function runResearch(id) {
   const el = document.getElementById('detail');
-  // remove previous result card if present
   el.querySelectorAll('.ai-result').forEach(n => n.remove());
   const target = h('div', { class: 'ai-result' });
   target.appendChild(h('div', { class: 'ai-head' }, '🤖 Wird angefragt… (Opus 4.7, kann 20–60 s dauern)'));
@@ -356,7 +419,6 @@ async function adoptSuggestion(personId, suggestion, kind) {
   if (kind === 'parent') {
     await api.createEdge({ from_id: created.id, to_id: personId, type: 'parent' });
   } else if (kind === 'sibling') {
-    // find current person's parents and link same parents to the sibling.
     const parents = state.edges
       .filter(e => e.type === 'parent' && e.to_id === personId)
       .map(e => e.from_id);
@@ -401,6 +463,36 @@ function openPersonDialog(p = null) {
   dlg.showModal();
 }
 
+function openImportDialog() {
+  const dlg = document.getElementById('import-dialog');
+  const form = document.getElementById('import-form');
+  const status = document.getElementById('import-status');
+  status.hidden = true;
+  status.textContent = '';
+  form.reset();
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const file = form.file.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      status.hidden = false;
+      status.textContent = 'Datei zu groß (max 2 MB).';
+      return;
+    }
+    status.hidden = false;
+    status.textContent = 'Wird hochgeladen und geparst…';
+    try {
+      const r = await api.importGedcom(file);
+      status.textContent = `${r.imported_persons} Personen, ${r.imported_edges} Beziehungen importiert.`;
+      await reload();
+      setTimeout(() => dlg.close(), 1200);
+    } catch (e) {
+      status.textContent = 'Fehler: ' + e.message;
+    }
+  };
+  dlg.showModal();
+}
+
 function openEdgeDialog() {
   const dlg = document.getElementById('edge-dialog');
   const form = document.getElementById('edge-form');
@@ -422,7 +514,19 @@ document.addEventListener('click', (ev) => {
 });
 document.getElementById('btn-add-person').onclick = () => openPersonDialog();
 document.getElementById('btn-add-edge').onclick = () => openEdgeDialog();
+document.getElementById('btn-import-gedcom').onclick = () => openImportDialog();
 document.getElementById('btn-reload').onclick = () => reload();
+document.getElementById('btn-logout').onclick = () => logout();
 document.getElementById('search').oninput = (ev) => { state.filter = ev.target.value; renderList(); };
 
-reload().catch(e => alert('Laden fehlgeschlagen: ' + e.message));
+(async function boot() {
+  try {
+    const me = await api.me();
+    if (!me) { applyRole(); openLoginDialog(); return; }
+    state.role = me.role;
+    applyRole();
+    await reload();
+  } catch (e) {
+    alert('Startfehler: ' + e.message);
+  }
+})();

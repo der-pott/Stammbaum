@@ -1,14 +1,35 @@
 import express from 'express';
-import { db, nowIso, newId } from './db.js';
+import cookieParser from 'cookie-parser';
+import {
+  db, nowIso, newId,
+  verifyPin, getPinHash, seedInitialPins,
+  createSession, getSession, deleteSession, purgeExpiredSessions,
+  logAudit,
+} from './db.js';
 import { createAnthropicClient, runResearch } from './research.js';
 import { createRateLimiter } from './ratelimit.js';
+import { gedcomToPayload } from './gedcom.js';
 
 const app = express();
 app.set('trust proxy', true);
 app.use(express.json({ limit: '512kb' }));
+app.use(cookieParser());
+
+seedInitialPins();
+purgeExpiredSessions();
 
 const anthropic = createAnthropicClient();
 const aiLimiter = createRateLimiter({ limit: 10, windowMs: 60_000 });
+const loginLimiter = createRateLimiter({ limit: 5, windowMs: 60_000 });
+
+const COOKIE_NAME = 'sb_session';
+const COOKIE_OPTS = {
+  httpOnly: true,
+  sameSite: 'strict',
+  secure: true,
+  path: '/',
+  maxAge: 30 * 864e5,
+};
 
 const PERSON_FIELDS = [
   'given_name','surname','birth_name','gender',
@@ -36,14 +57,76 @@ function httpErr(status, message) {
   return err;
 }
 
+/* auth middleware ------------------------------------------------------- */
+
+function readSession(req) {
+  const token = req.cookies?.[COOKIE_NAME];
+  if (!token) return null;
+  const s = getSession(token);
+  return s ? { token, role: s.role } : null;
+}
+
+function requireViewer(req, res, next) {
+  const s = readSession(req);
+  if (!s) return res.status(401).json({ error: 'login required' });
+  req.auth = s;
+  next();
+}
+
+function requireEditor(req, res, next) {
+  const s = readSession(req);
+  if (!s) return res.status(401).json({ error: 'login required' });
+  if (s.role !== 'editor') return res.status(403).json({ error: 'editor role required' });
+  req.auth = s;
+  next();
+}
+
+/* auth routes ----------------------------------------------------------- */
+
+app.post('/api/auth/login', loginLimiter, (req, res) => {
+  const { role, pin } = req.body || {};
+  if (!['editor','viewer'].includes(role)) return res.status(400).json({ error: 'role must be editor or viewer' });
+  if (typeof pin !== 'string' || !pin) return res.status(400).json({ error: 'pin required' });
+  const hash = getPinHash(role);
+  if (!hash) {
+    logAudit(null, 'auth.login.no-pin', role);
+    return res.status(503).json({ error: `kein PIN für Rolle "${role}" gesetzt` });
+  }
+  if (!verifyPin(pin, hash)) {
+    logAudit(null, 'auth.login.failed', role);
+    return res.status(401).json({ error: 'falscher PIN' });
+  }
+  const { token } = createSession(role);
+  res.cookie(COOKIE_NAME, token, COOKIE_OPTS);
+  logAudit(role, 'auth.login.ok', null);
+  res.json({ role });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  const token = req.cookies?.[COOKIE_NAME];
+  if (token) {
+    const s = getSession(token);
+    deleteSession(token);
+    logAudit(s?.role, 'auth.logout', null);
+  }
+  res.clearCookie(COOKIE_NAME, { ...COOKIE_OPTS, maxAge: undefined });
+  res.json({ ok: true });
+});
+
+app.get('/api/auth/me', (req, res) => {
+  const s = readSession(req);
+  if (!s) return res.status(401).json({ error: 'login required' });
+  res.json({ role: s.role });
+});
+
 /* persons --------------------------------------------------------------- */
 
-app.get('/api/persons', (_req, res) => {
+app.get('/api/persons', requireViewer, (_req, res) => {
   const rows = db.prepare('SELECT * FROM persons ORDER BY surname, given_name').all();
   res.json(rows);
 });
 
-app.post('/api/persons', (req, res) => {
+app.post('/api/persons', requireEditor, (req, res) => {
   const data = sanitizePerson(req.body || {});
   const id = newId();
   const now = nowIso();
@@ -57,10 +140,11 @@ app.post('/api/persons', (req, res) => {
     birth_date:null, birth_place:null, death_date:null, death_place:null, notes:null,
     ...data, created_at: now, updated_at: now,
   });
+  logAudit(req.auth.role, 'person.create', id);
   res.status(201).json(db.prepare('SELECT * FROM persons WHERE id=?').get(id));
 });
 
-app.get('/api/persons/:id', (req, res) => {
+app.get('/api/persons/:id', requireViewer, (req, res) => {
   const person = db.prepare('SELECT * FROM persons WHERE id=?').get(req.params.id);
   if (!person) return res.status(404).json({ error: 'not found' });
   const edges = db.prepare('SELECT * FROM edges WHERE from_id=? OR to_id=?')
@@ -68,7 +152,7 @@ app.get('/api/persons/:id', (req, res) => {
   res.json({ person, edges });
 });
 
-app.patch('/api/persons/:id', (req, res) => {
+app.patch('/api/persons/:id', requireEditor, (req, res) => {
   const existing = db.prepare('SELECT id FROM persons WHERE id=?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'not found' });
   const data = sanitizePerson(req.body || {});
@@ -76,21 +160,23 @@ app.patch('/api/persons/:id', (req, res) => {
   const set = Object.keys(data).map(k => `${k}=@${k}`).join(', ');
   db.prepare(`UPDATE persons SET ${set}, updated_at=@updated_at WHERE id=@id`)
     .run({ ...data, id: req.params.id, updated_at: nowIso() });
+  logAudit(req.auth.role, 'person.update', req.params.id);
   res.json(db.prepare('SELECT * FROM persons WHERE id=?').get(req.params.id));
 });
 
-app.delete('/api/persons/:id', (req, res) => {
+app.delete('/api/persons/:id', requireEditor, (req, res) => {
   const info = db.prepare('DELETE FROM persons WHERE id=?').run(req.params.id);
+  logAudit(req.auth.role, 'person.delete', req.params.id);
   res.json({ deleted: info.changes });
 });
 
 /* edges ----------------------------------------------------------------- */
 
-app.get('/api/edges', (_req, res) => {
+app.get('/api/edges', requireViewer, (_req, res) => {
   res.json(db.prepare('SELECT * FROM edges').all());
 });
 
-app.post('/api/edges', (req, res) => {
+app.post('/api/edges', requireEditor, (req, res) => {
   const { from_id, to_id, type, since, until } = req.body || {};
   if (!from_id || !to_id || from_id === to_id) {
     return res.status(400).json({ error: 'from_id and to_id required, must differ' });
@@ -118,17 +204,19 @@ app.post('/api/edges', (req, res) => {
   db.prepare(`INSERT INTO edges (id, from_id, to_id, type, since, until, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)`)
     .run(id, from_id, to_id, type, since || null, until || null, nowIso());
+  logAudit(req.auth.role, 'edge.create', `${type} ${from_id}->${to_id}`);
   res.status(201).json(db.prepare('SELECT * FROM edges WHERE id=?').get(id));
 });
 
-app.delete('/api/edges/:id', (req, res) => {
+app.delete('/api/edges/:id', requireEditor, (req, res) => {
   const info = db.prepare('DELETE FROM edges WHERE id=?').run(req.params.id);
+  logAudit(req.auth.role, 'edge.delete', req.params.id);
   res.json({ deleted: info.changes });
 });
 
 /* tree ------------------------------------------------------------------ */
 
-app.get('/api/tree', (_req, res) => {
+app.get('/api/tree', requireViewer, (_req, res) => {
   const persons = db.prepare('SELECT * FROM persons').all();
   const edges = db.prepare('SELECT * FROM edges').all();
   res.json({ persons, edges });
@@ -136,7 +224,7 @@ app.get('/api/tree', (_req, res) => {
 
 /* ai research ----------------------------------------------------------- */
 
-app.post('/api/ai/research', aiLimiter, async (req, res) => {
+app.post('/api/ai/research', requireEditor, aiLimiter, async (req, res) => {
   const { person_id, prompt } = req.body || {};
   if (!person_id) return res.status(400).json({ error: 'person_id required' });
   const person = db.prepare('SELECT * FROM persons WHERE id=?').get(person_id);
@@ -151,7 +239,6 @@ app.post('/api/ai/research', aiLimiter, async (req, res) => {
   const started = nowIso();
   const extraPrompt = String(prompt || '').slice(0, 2000);
 
-  // insert as 'running' so we can see interrupted calls afterwards.
   db.prepare(`INSERT INTO ai_runs (id, person_id, prompt, model, response, status, created_at, completed_at)
     VALUES (?,?,?,?,?,?,?,?)`)
     .run(runId, person_id, extraPrompt, 'claude-opus-4-7', null, 'running', started, null);
@@ -160,6 +247,7 @@ app.post('/api/ai/research', aiLimiter, async (req, res) => {
     const result = await runResearch(anthropic, person, extraPrompt);
     db.prepare(`UPDATE ai_runs SET model=?, response=?, status='completed', prompt=?, completed_at=? WHERE id=?`)
       .run(result.model, JSON.stringify({ data: result.data, raw: result.raw, usage: result.usage }), result.userPrompt, nowIso(), runId);
+    logAudit(req.auth.role, 'ai.research.ok', person_id);
     return res.json({
       id: runId,
       status: 'completed',
@@ -175,19 +263,68 @@ app.post('/api/ai/research', aiLimiter, async (req, res) => {
       : { error: err?.message || 'Anthropic API error', code: err?.status || err?.code };
     db.prepare(`UPDATE ai_runs SET status='failed', response=?, completed_at=? WHERE id=?`)
       .run(JSON.stringify(detail), nowIso(), runId);
-    const status = err?.code === 'PARSE_FAILED' ? 502 : (err?.status >= 400 && err?.status < 600 ? 502 : 502);
-    return res.status(status).json({ id: runId, status: 'failed', ...detail });
+    logAudit(req.auth.role, 'ai.research.fail', person_id);
+    return res.status(502).json({ id: runId, status: 'failed', ...detail });
   }
 });
 
-app.get('/api/ai/runs/:person_id', (req, res) => {
+app.get('/api/ai/runs/:person_id', requireViewer, (req, res) => {
   const rows = db.prepare('SELECT id, prompt, model, status, created_at, completed_at FROM ai_runs WHERE person_id=? ORDER BY created_at DESC LIMIT 20')
     .all(req.params.person_id);
   res.json(rows);
 });
 
+/* gedcom import --------------------------------------------------------- */
+// Write operation.  When auth lands, wrap this route in the editor-role guard.
+// Uses raw body (not multipart) so no extra dep is needed; the frontend posts
+// the file as the request body directly.  2 MB cap matches a typical GEDCOM.
+
+const gedcomBody = express.raw({ type: () => true, limit: '2mb' });
+
+app.post('/api/import/gedcom', requireEditor, gedcomBody, (req, res) => {
+  const raw = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : String(req.body || '');
+  if (!raw.trim()) return res.status(400).json({ error: 'empty body' });
+  if (!/^\s*0\s+/.test(raw)) return res.status(400).json({ error: 'not a GEDCOM file' });
+
+  let payload;
+  try { payload = gedcomToPayload(raw); }
+  catch (e) { return res.status(400).json({ error: 'parse failed: ' + (e?.message || 'unknown') }); }
+
+  if (!payload.persons.length) return res.status(400).json({ error: 'no INDI records found' });
+
+  const now = nowIso();
+  const insertPerson = db.prepare(`
+    INSERT INTO persons (id, given_name, surname, birth_name, gender,
+      birth_date, birth_place, death_date, death_place, notes, created_at, updated_at)
+    VALUES (@id,@given_name,@surname,@birth_name,@gender,
+      @birth_date,@birth_place,@death_date,@death_place,@notes,@created_at,@updated_at)
+  `);
+  const insertEdge = db.prepare(`INSERT INTO edges (id, from_id, to_id, type, since, until, created_at)
+    VALUES (?, ?, ?, 'parent', NULL, NULL, ?)`);
+  const insertSpouse = db.prepare(`INSERT INTO edges (id, from_id, to_id, type, since, until, created_at)
+    VALUES (?, ?, ?, 'spouse', NULL, NULL, ?)`);
+
+  const run = db.transaction(() => {
+    for (const p of payload.persons) {
+      insertPerson.run({ ...p, created_at: now, updated_at: now });
+    }
+    for (const e of payload.edges) {
+      if (e.type === 'parent') insertEdge.run(e.id, e.from_id, e.to_id, now);
+      else                     insertSpouse.run(e.id, e.from_id, e.to_id, now);
+    }
+  });
+  run();
+
+  logAudit(req.auth.role, 'gedcom.import', `${payload.persons.length} persons, ${payload.edges.length} edges`);
+  res.status(201).json({
+    imported_persons: payload.persons.length,
+    imported_edges: payload.edges.length,
+  });
+});
+
 /* health ---------------------------------------------------------------- */
 
+// Public health check so Caddy / monitoring can probe without auth.
 app.get('/api/health', (_req, res) => res.json({ ok: true, ts: nowIso() }));
 
 /* error handling -------------------------------------------------------- */
