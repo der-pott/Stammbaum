@@ -625,6 +625,7 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
 }
 
 /* Lightbox ----------------------------------------------------------- */
+[hidden] { display: none !important; }
 .lightbox {
   position: fixed; inset: 0; z-index: 40;
   background: color-mix(in oklch, var(--ink) 92%, transparent);
