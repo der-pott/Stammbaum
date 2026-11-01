@@ -287,10 +287,11 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
 /* Baum-Elemente */
 .year-axis-line { stroke: var(--line); stroke-width: 0.6; stroke-dasharray: 2 4; }
 .year-axis-text {
-  font-family: var(--font-display); font-size: 11px; font-weight: 400;
-  fill: var(--ink-faint); font-variant-numeric: oldstyle-nums;
+  font-family: var(--font-text); font-size: 11px; font-weight: 500;
+  fill: var(--ink-faint); font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
 }
-.year-axis-text.decade { font-size: 13px; fill: var(--ink-soft); font-weight: 500; }
+.year-axis-text.decade { font-size: 12px; fill: var(--ink-soft); font-weight: 600; }
 
 .edge-parent { fill: none; stroke: var(--line-strong); stroke-width: 1; }
 .edge-spouse { fill: none; stroke: var(--seal); stroke-width: 1.4; stroke-dasharray: 3 3; opacity: 0.72; }
