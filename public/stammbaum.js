@@ -256,14 +256,116 @@ function renderRelList(title, people) {
 
 async function runResearch(id) {
   const el = document.getElementById('detail');
-  const target = h('div', { class: 'ai-result' }, 'Wird angefragt…');
+  // remove previous result card if present
+  el.querySelectorAll('.ai-result').forEach(n => n.remove());
+  const target = h('div', { class: 'ai-result' });
+  target.appendChild(h('div', { class: 'ai-head' }, '🤖 Wird angefragt… (Opus 4.7, kann 20–60 s dauern)'));
   el.appendChild(target);
   try {
     const r = await api.research(id);
-    target.textContent = `${r.person}\n\n${(r.hinweise || []).join('\n')}\n\nPrompt:\n${r.prompt}`;
+    renderResearchResult(target, id, r);
   } catch (e) {
-    target.textContent = 'Fehler: ' + e.message;
+    target.innerHTML = '';
+    target.appendChild(h('div', { class: 'ai-head err' }, 'Fehler'));
+    target.appendChild(h('div', {}, e.message));
   }
+}
+
+function renderResearchResult(target, personId, r) {
+  target.innerHTML = '';
+  const header = h('div', { class: 'ai-head' },
+    `🤖 ${r.person || ''} · ${r.model || ''}`);
+  target.appendChild(header);
+
+  const eltern = Array.isArray(r.eltern) ? r.eltern : [];
+  const geschwister = Array.isArray(r.geschwister) ? r.geschwister : [];
+  const hypothesen = Array.isArray(r.hypothesen) ? r.hypothesen : [];
+  const quellen = Array.isArray(r.quellen_vorschlag) ? r.quellen_vorschlag : [];
+
+  if (eltern.length) {
+    target.appendChild(h('h4', {}, 'Mögliche Eltern'));
+    eltern.forEach(e => target.appendChild(renderSuggestionRow(personId, e, { kind: 'parent' })));
+  }
+  if (geschwister.length) {
+    target.appendChild(h('h4', {}, 'Mögliche Geschwister'));
+    geschwister.forEach(e => target.appendChild(renderSuggestionRow(personId, e, { kind: 'sibling' })));
+  }
+  if (hypothesen.length) {
+    target.appendChild(h('h4', {}, 'Hypothesen'));
+    const ul = h('ul', { class: 'ai-list' });
+    hypothesen.forEach(line => ul.appendChild(h('li', {}, line)));
+    target.appendChild(ul);
+  }
+  if (quellen.length) {
+    target.appendChild(h('h4', {}, 'Quellen-Vorschläge'));
+    const ul = h('ul', { class: 'ai-list' });
+    quellen.forEach(line => ul.appendChild(h('li', {}, line)));
+    target.appendChild(ul);
+  }
+  if (!eltern.length && !geschwister.length && !hypothesen.length) {
+    target.appendChild(h('div', { class: 'meta' }, 'Keine Vorschläge zurückerhalten.'));
+  }
+}
+
+function renderSuggestionRow(personId, suggestion, { kind }) {
+  const row = h('div', { class: 'ai-sugg' });
+  const left = h('div', { class: 'ai-sugg-body' });
+  const title = suggestion.name || '(ohne Namen)';
+  const metaParts = [
+    suggestion.rolle,
+    [suggestion.geburt, suggestion.sterbe].filter(Boolean).join(' – '),
+    suggestion.ort,
+  ].filter(Boolean);
+  left.appendChild(h('div', { class: 'ai-sugg-name' }, title));
+  if (metaParts.length) left.appendChild(h('div', { class: 'meta' }, metaParts.join(' · ')));
+  if (suggestion.quellenhinweis) left.appendChild(h('div', { class: 'ai-src' }, suggestion.quellenhinweis));
+  row.appendChild(left);
+
+  const btn = button('+ Übernehmen', async () => {
+    btn.disabled = true;
+    btn.textContent = '…';
+    try {
+      await adoptSuggestion(personId, suggestion, kind);
+      btn.textContent = '✓ hinzugefügt';
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = '+ Übernehmen';
+      alert('Fehler: ' + e.message);
+    }
+  });
+  row.appendChild(btn);
+  return row;
+}
+
+async function adoptSuggestion(personId, suggestion, kind) {
+  const name = (suggestion.name || '').trim();
+  if (!name) throw new Error('Vorschlag ohne Namen');
+  const parts = name.split(/\s+/);
+  const given = parts.slice(0, -1).join(' ') || parts[0];
+  const surname = parts.length > 1 ? parts.at(-1) : '';
+  const gender = suggestion.rolle === 'Vater' ? 'm'
+    : suggestion.rolle === 'Mutter' ? 'f' : '';
+  const created = await api.create({
+    given_name: given, surname,
+    gender,
+    birth_date: suggestion.geburt && suggestion.geburt !== '?' ? suggestion.geburt : '',
+    birth_place: suggestion.ort && suggestion.ort !== '?' ? suggestion.ort : '',
+    death_date: suggestion.sterbe && suggestion.sterbe !== '?' ? suggestion.sterbe : '',
+    notes: suggestion.quellenhinweis || '',
+  });
+  if (kind === 'parent') {
+    await api.createEdge({ from_id: created.id, to_id: personId, type: 'parent' });
+  } else if (kind === 'sibling') {
+    // find current person's parents and link same parents to the sibling.
+    const parents = state.edges
+      .filter(e => e.type === 'parent' && e.to_id === personId)
+      .map(e => e.from_id);
+    for (const parentId of parents) {
+      try { await api.createEdge({ from_id: parentId, to_id: created.id, type: 'parent' }); }
+      catch (_) { /* duplicates ignored */ }
+    }
+  }
+  await reload();
 }
 
 /* -------- helpers -------- */

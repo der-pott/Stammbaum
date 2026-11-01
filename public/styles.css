@@ -68,7 +68,18 @@ aside, section { overflow: auto; }
 #detail .relations li { padding: 4px 6px; cursor: pointer; border-radius: 4px; }
 #detail .relations li:hover { background: var(--panel); }
 #detail .actions { display: flex; gap: 6px; margin-top: 14px; flex-wrap: wrap; }
-#detail .ai-result { margin-top: 10px; padding: 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; font-size: 0.9em; white-space: pre-wrap; }
+#detail .ai-result { margin-top: 10px; padding: 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; font-size: 0.9em; }
+#detail .ai-result .ai-head { font-weight: 600; margin-bottom: 6px; }
+#detail .ai-result .ai-head.err { color: #ff8282; }
+#detail .ai-result h4 { margin: 10px 0 4px; font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+#detail .ai-list { list-style: disc; margin: 2px 0 2px 20px; padding: 0; }
+#detail .ai-list li { padding: 2px 0; }
+#detail .ai-sugg { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--border); }
+#detail .ai-sugg:last-child { border-bottom: none; }
+#detail .ai-sugg-body { flex: 1; min-width: 0; }
+#detail .ai-sugg-name { font-weight: 500; }
+#detail .ai-src { color: var(--muted); font-size: 0.85em; margin-top: 2px; }
+#detail .ai-sugg button { white-space: nowrap; }
 
 dialog {
   background: var(--panel); color: var(--text); border: 1px solid var(--border);

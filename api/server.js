@@ -1,8 +1,14 @@
 import express from 'express';
 import { db, nowIso, newId } from './db.js';
+import { createAnthropicClient, runResearch } from './research.js';
+import { createRateLimiter } from './ratelimit.js';
 
 const app = express();
+app.set('trust proxy', true);
 app.use(express.json({ limit: '512kb' }));
+
+const anthropic = createAnthropicClient();
+const aiLimiter = createRateLimiter({ limit: 10, windowMs: 60_000 });
 
 const PERSON_FIELDS = [
   'given_name','surname','birth_name','gender',
@@ -128,34 +134,50 @@ app.get('/api/tree', (_req, res) => {
   res.json({ persons, edges });
 });
 
-/* ai research stub ------------------------------------------------------ */
+/* ai research ----------------------------------------------------------- */
 
-app.post('/api/ai/research', (req, res) => {
+app.post('/api/ai/research', aiLimiter, async (req, res) => {
   const { person_id, prompt } = req.body || {};
   if (!person_id) return res.status(400).json({ error: 'person_id required' });
   const person = db.prepare('SELECT * FROM persons WHERE id=?').get(person_id);
   if (!person) return res.status(404).json({ error: 'person not found' });
+  if (!anthropic) {
+    return res.status(503).json({
+      error: 'ANTHROPIC_API_KEY nicht gesetzt — KI-Research deaktiviert. Setze den Key in /srv/projects/stammbaum/.env und rebuild via scripts/deploy.sh --api.',
+    });
+  }
 
-  const id = newId();
-  const now = nowIso();
-  const effectivePrompt = String(prompt || '').slice(0, 2000)
-    || `Ahnenforschung: finde mögliche Eltern, Geschwister und Lebensdaten für ${person.given_name || ''} ${person.surname || ''}, geboren ${person.birth_date || '?'} in ${person.birth_place || '?'}.`;
+  const runId = newId();
+  const started = nowIso();
+  const extraPrompt = String(prompt || '').slice(0, 2000);
 
-  // Stub: records the request, returns a placeholder.  Real LLM call wires in later.
-  const suggestion = {
-    person: `${person.given_name || ''} ${person.surname || ''}`.trim() || person.id,
-    hinweise: [
-      'KI-Research ist noch nicht angebunden. Dieser Endpunkt protokolliert nur den Prompt.',
-      'Nächster Schritt: ANTHROPIC_API_KEY setzen und Modell-Call ergänzen.',
-    ],
-    prompt: effectivePrompt,
-  };
-
+  // insert as 'running' so we can see interrupted calls afterwards.
   db.prepare(`INSERT INTO ai_runs (id, person_id, prompt, model, response, status, created_at, completed_at)
     VALUES (?,?,?,?,?,?,?,?)`)
-    .run(id, person_id, effectivePrompt, 'stub', JSON.stringify(suggestion), 'completed', now, now);
+    .run(runId, person_id, extraPrompt, 'claude-opus-4-7', null, 'running', started, null);
 
-  res.json({ id, status: 'completed', ...suggestion });
+  try {
+    const result = await runResearch(anthropic, person, extraPrompt);
+    db.prepare(`UPDATE ai_runs SET model=?, response=?, status='completed', prompt=?, completed_at=? WHERE id=?`)
+      .run(result.model, JSON.stringify({ data: result.data, raw: result.raw, usage: result.usage }), result.userPrompt, nowIso(), runId);
+    return res.json({
+      id: runId,
+      status: 'completed',
+      model: result.model,
+      person: `${person.given_name || ''} ${person.surname || ''}`.trim() || person.id,
+      ...result.data,
+      _raw: result.raw,
+      _usage: result.usage,
+    });
+  } catch (err) {
+    const detail = err?.code === 'PARSE_FAILED'
+      ? { error: 'KI-Antwort war kein gültiges JSON.', raw: err.raw?.slice(0, 2000) }
+      : { error: err?.message || 'Anthropic API error', code: err?.status || err?.code };
+    db.prepare(`UPDATE ai_runs SET status='failed', response=?, completed_at=? WHERE id=?`)
+      .run(JSON.stringify(detail), nowIso(), runId);
+    const status = err?.code === 'PARSE_FAILED' ? 502 : (err?.status >= 400 && err?.status < 600 ? 502 : 502);
+    return res.status(status).json({ id: runId, status: 'failed', ...detail });
+  }
 });
 
 app.get('/api/ai/runs/:person_id', (req, res) => {

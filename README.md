@@ -7,7 +7,17 @@ Familien-Stammbaum mit optionaler KI-Ahnenforschung. Erreichbar unter `stammbaum
 - Personenverwaltung (Namen, Daten, Geburts-/Sterbeort, Notizen)
 - Beziehungen: Eltern → Kind, Ehepartner
 - Automatische Stammbaum-Visualisierung (SVG, Generationen-Layout)
-- KI-Research-Endpunkt (Stub; LLM-Anbindung folgt via `ANTHROPIC_API_KEY`)
+- KI-Ahnenforschung via Anthropic (Modell `claude-opus-4-7`, strukturierte Vorschläge für Eltern/Geschwister/Hypothesen)
+
+## KI-Setup
+
+```bash
+# auf dem VPS
+echo 'ANTHROPIC_API_KEY=sk-ant-api03-...' | ssh vps 'cat > /srv/projects/stammbaum/.env && chmod 600 /srv/projects/stammbaum/.env'
+./scripts/deploy.sh --api
+```
+
+Ohne Key liefert `/api/ai/research` 503. Rate-Limit: 10 Calls / Minute / IP.
 
 ## Struktur
 
@@ -32,8 +42,17 @@ GET    /api/edges
 POST   /api/edges               { from_id, to_id, type: parent|spouse, since?, until? }
 DELETE /api/edges/:id
 GET    /api/tree                { persons, edges }
-POST   /api/ai/research         { person_id, prompt? }
+POST   /api/ai/research         { person_id, prompt? }   # 10 req/min/IP
 GET    /api/ai/runs/:person_id
+
+Antwortformat /api/ai/research:
+{
+  id, status, model, person,
+  eltern: [{name, rolle, geburt, sterbe, ort, quellenhinweis}],
+  geschwister: [{name, geburt, ort, quellenhinweis}],
+  hypothesen: [string],
+  quellen_vorschlag: [string]
+}
 ```
 
 ## Lokal
