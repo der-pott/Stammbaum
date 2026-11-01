@@ -1,5 +1,7 @@
 import express from 'express';
 import cookieParser from 'cookie-parser';
+import { mkdirSync, writeFileSync, readFileSync, unlinkSync, existsSync } from 'node:fs';
+import { join as pathJoin, dirname as pathDir } from 'node:path';
 import {
   db, nowIso, newId,
   verifyPin, getPinHash, seedInitialPins,
@@ -149,7 +151,12 @@ app.get('/api/persons/:id', requireViewer, (req, res) => {
   if (!person) return res.status(404).json({ error: 'not found' });
   const edges = db.prepare('SELECT * FROM edges WHERE from_id=? OR to_id=?')
     .all(req.params.id, req.params.id);
-  res.json({ person, edges });
+  const images = db.prepare(`
+    SELECT i.id, i.mime, i.bytes, i.caption, i.taken_at, pi.role
+    FROM images i JOIN person_images pi ON pi.image_id = i.id
+    WHERE pi.person_id = ? ORDER BY i.created_at
+  `).all(req.params.id);
+  res.json({ person, edges, images });
 });
 
 app.patch('/api/persons/:id', requireEditor, (req, res) => {
@@ -320,6 +327,93 @@ app.post('/api/import/gedcom', requireEditor, gedcomBody, (req, res) => {
     imported_persons: payload.persons.length,
     imported_edges: payload.edges.length,
   });
+});
+
+/* images ---------------------------------------------------------------- */
+// Bytes auf Disk unter /data/images/<id>, Metadaten + Verknüpfungen in SQLite.
+// Ein Bild kann an mehreren Personen hängen (Heirats-/Taufurkunden). Upload
+// per raw body + Content-Type, keine Multipart-Lib.
+
+const IMAGES_DIR = process.env.IMAGES_DIR
+  || pathJoin(pathDir(process.env.DB_PATH || '/data/stammbaum.db'), 'images');
+mkdirSync(IMAGES_DIR, { recursive: true });
+
+const IMAGE_MIME_WHITELIST = new Set([
+  'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'application/pdf',
+]);
+const imageBody = express.raw({ type: () => true, limit: '15mb' });
+
+app.post('/api/images', requireEditor, imageBody, (req, res) => {
+  const mime = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  if (!IMAGE_MIME_WHITELIST.has(mime)) {
+    return res.status(400).json({ error: 'mime not allowed', mime });
+  }
+  if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+    return res.status(400).json({ error: 'empty body' });
+  }
+  const caption = typeof req.query.caption === 'string' ? req.query.caption.slice(0, 500) : null;
+  const taken_at = typeof req.query.taken_at === 'string' ? req.query.taken_at.slice(0, 40) : null;
+  const id = newId();
+  writeFileSync(pathJoin(IMAGES_DIR, id), req.body);
+  db.prepare(`INSERT INTO images (id, mime, bytes, caption, taken_at, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)`)
+    .run(id, mime, req.body.length, caption, taken_at, nowIso());
+  logAudit(req.auth.role, 'image.upload', `${id} ${mime} ${req.body.length}B`);
+  res.status(201).json({ id, mime, bytes: req.body.length, caption, taken_at });
+});
+
+app.get('/api/images/:id', requireViewer, (req, res) => {
+  const row = db.prepare('SELECT mime FROM images WHERE id=?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const path = pathJoin(IMAGES_DIR, req.params.id);
+  if (!existsSync(path)) return res.status(410).json({ error: 'file gone' });
+  res.set('Content-Type', row.mime);
+  res.set('Cache-Control', 'private, max-age=86400');
+  res.send(readFileSync(path));
+});
+
+app.get('/api/images/:id/meta', requireViewer, (req, res) => {
+  const row = db.prepare('SELECT * FROM images WHERE id=?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const persons = db.prepare(`SELECT pi.person_id, pi.role, p.given_name, p.surname
+    FROM person_images pi JOIN persons p ON p.id = pi.person_id WHERE pi.image_id = ?`)
+    .all(req.params.id);
+  res.json({ ...row, persons });
+});
+
+app.delete('/api/images/:id', requireEditor, (req, res) => {
+  const row = db.prepare('SELECT id FROM images WHERE id=?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const path = pathJoin(IMAGES_DIR, req.params.id);
+  try { if (existsSync(path)) unlinkSync(path); } catch (_) {}
+  db.prepare('DELETE FROM images WHERE id=?').run(req.params.id);
+  logAudit(req.auth.role, 'image.delete', req.params.id);
+  res.json({ deleted: 1 });
+});
+
+app.post('/api/person-images', requireEditor, (req, res) => {
+  const { person_id, image_id, role } = req.body || {};
+  if (!person_id || !image_id) return res.status(400).json({ error: 'person_id + image_id required' });
+  const p = db.prepare('SELECT id FROM persons WHERE id=?').get(person_id);
+  const i = db.prepare('SELECT id FROM images WHERE id=?').get(image_id);
+  if (!p || !i) return res.status(400).json({ error: 'unknown person_id or image_id' });
+  try {
+    db.prepare(`INSERT INTO person_images (person_id, image_id, role, created_at)
+      VALUES (?, ?, ?, ?)`).run(person_id, image_id, role?.slice(0, 100) || null, nowIso());
+  } catch (e) {
+    if (String(e.message).includes('UNIQUE')) return res.status(409).json({ error: 'already linked' });
+    throw e;
+  }
+  logAudit(req.auth.role, 'image.link', `${person_id}<->${image_id}`);
+  res.status(201).json({ person_id, image_id, role: role || null });
+});
+
+app.delete('/api/person-images', requireEditor, (req, res) => {
+  const { person_id, image_id } = req.body || {};
+  if (!person_id || !image_id) return res.status(400).json({ error: 'person_id + image_id required' });
+  const info = db.prepare('DELETE FROM person_images WHERE person_id=? AND image_id=?')
+    .run(person_id, image_id);
+  res.json({ deleted: info.changes });
 });
 
 /* health ---------------------------------------------------------------- */

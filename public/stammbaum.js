@@ -26,6 +26,26 @@ const api = {
   },
   async login(role, pin) { return j(await fetch('/api/auth/login', postJson({ role, pin }))); },
   async logout() { return j(await fetch('/api/auth/logout', { method: 'POST' })); },
+  async personDetail(id) { return j(await fetch(`/api/persons/${id}`)); },
+  async uploadImage(file, caption) {
+    const qs = caption ? ('?caption=' + encodeURIComponent(caption)) : '';
+    return j(await fetch('/api/images' + qs, {
+      method: 'POST',
+      headers: { 'content-type': file.type || 'application/octet-stream' },
+      body: file,
+    }));
+  },
+  async linkImage(person_id, image_id, role) {
+    return j(await fetch('/api/person-images', postJson({ person_id, image_id, role })));
+  },
+  async unlinkImage(person_id, image_id) {
+    return j(await fetch('/api/person-images', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ person_id, image_id }),
+    }));
+  },
+  async removeImage(id) { return j(await fetch(`/api/images/${id}`, { method: 'DELETE' })); },
 };
 function postJson(data) { return { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) }; }
 function patchJson(data) { return { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) }; }
@@ -292,9 +312,17 @@ function renderDetail() {
   rel.appendChild(renderRelList('Kinder', children));
   el.appendChild(rel);
 
+  const imagesWrap = h('div', { class: 'images-wrap' });
+  imagesWrap.appendChild(h('h3', {}, 'Dokumente / Bilder'));
+  const imagesGrid = h('div', { class: 'image-grid', id: 'image-grid-' + p.id }, '…');
+  imagesWrap.appendChild(imagesGrid);
+  el.appendChild(imagesWrap);
+  loadImagesInto(p.id, imagesGrid);
+
   if (state.role === 'editor') {
     const actions = h('div', { class: 'actions' });
     actions.appendChild(button('Bearbeiten', () => openPersonDialog(p)));
+    actions.appendChild(button('📎 Bild hochladen', () => openImageUpload(p.id)));
     actions.appendChild(button('🤖 KI-Research', () => runResearch(p.id)));
     actions.appendChild(button('Löschen', async () => {
       if (!confirm(`${nameOf(p)} löschen?`)) return;
@@ -302,6 +330,65 @@ function renderDetail() {
     }));
     el.appendChild(actions);
   }
+}
+
+async function loadImagesInto(personId, container) {
+  try {
+    const d = await api.personDetail(personId);
+    container.innerHTML = '';
+    if (!d.images?.length) {
+      container.appendChild(h('div', { class: 'meta' }, '—'));
+      return;
+    }
+    for (const img of d.images) {
+      const tile = h('div', { class: 'image-tile' });
+      const isPdf = img.mime === 'application/pdf';
+      if (isPdf) {
+        tile.appendChild(h('div', { class: 'image-pdf' }, '📄 PDF'));
+      } else {
+        const el = h('img', { src: '/api/images/' + img.id, alt: img.caption || '' });
+        tile.appendChild(el);
+      }
+      if (img.caption) tile.appendChild(h('div', { class: 'image-caption' }, img.caption));
+      tile.onclick = () => window.open('/api/images/' + img.id, '_blank', 'noopener');
+      if (state.role === 'editor') {
+        const rm = h('button', { class: 'image-rm', title: 'Verknüpfung lösen' }, '×');
+        rm.onclick = async (ev) => {
+          ev.stopPropagation();
+          if (!confirm('Verknüpfung zu dieser Person entfernen? (Bild bleibt in anderen Personen bestehen.)')) return;
+          try {
+            await api.unlinkImage(personId, img.id);
+            await loadImagesInto(personId, container);
+          } catch (e) { alert('Fehler: ' + e.message); }
+        };
+        tile.appendChild(rm);
+      }
+      container.appendChild(tile);
+    }
+  } catch (e) {
+    container.innerHTML = '';
+    container.appendChild(h('div', { class: 'meta' }, 'Fehler: ' + e.message));
+  }
+}
+
+function openImageUpload(personId) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*,application/pdf';
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    const caption = prompt(`Beschreibung für "${file.name}" (optional):`, file.name) ?? '';
+    try {
+      const img = await api.uploadImage(file, caption);
+      await api.linkImage(personId, img.id, null);
+      const grid = document.getElementById('image-grid-' + personId);
+      if (grid) await loadImagesInto(personId, grid);
+    } catch (e) {
+      alert('Upload fehlgeschlagen: ' + e.message);
+    }
+  };
+  input.click();
 }
 
 function renderRelList(title, people) {

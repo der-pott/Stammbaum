@@ -51,6 +51,25 @@ db.exec(`
     completed_at TEXT
   );
 
+  CREATE TABLE IF NOT EXISTS images (
+    id         TEXT PRIMARY KEY,
+    mime       TEXT NOT NULL,
+    bytes      INTEGER NOT NULL,
+    caption    TEXT,
+    taken_at   TEXT,
+    created_at TEXT NOT NULL
+  );
+
+  -- Join: ein Bild (z. B. Heiratsurkunde) kann mehreren Personen gehören.
+  CREATE TABLE IF NOT EXISTS person_images (
+    person_id  TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    image_id   TEXT NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+    role       TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (person_id, image_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_pi_image ON person_images(image_id);
+
   CREATE TABLE IF NOT EXISTS pins (
     role TEXT PRIMARY KEY,
     hash TEXT NOT NULL

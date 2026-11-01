@@ -90,6 +90,18 @@ aside, section { overflow: auto; }
 #detail .ai-sugg-body { flex: 1; min-width: 0; }
 #detail .ai-sugg-name { font-weight: 500; }
 #detail .ai-src { color: var(--muted); font-size: 0.85em; margin-top: 2px; }
+
+/* Dokumente / Bilder */
+#detail .images-wrap { margin-top: 14px; }
+#detail .images-wrap h3 { margin: 0 0 6px; font-size: 0.85rem; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+#detail .image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 6px; }
+#detail .image-tile { position: relative; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; cursor: pointer; aspect-ratio: 1; display: flex; flex-direction: column; }
+#detail .image-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+#detail .image-tile:hover { border-color: var(--accent); }
+#detail .image-pdf { flex: 1; display: flex; align-items: center; justify-content: center; font-size: 1.3rem; color: var(--muted); }
+#detail .image-caption { position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,0.65); color: var(--text); font-size: 0.7em; padding: 2px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#detail .image-rm { position: absolute; top: 2px; right: 2px; background: rgba(0,0,0,0.6); color: var(--text); border: none; border-radius: 50%; width: 18px; height: 18px; padding: 0; font-size: 0.9em; line-height: 18px; cursor: pointer; opacity: 0; transition: opacity 0.15s; }
+#detail .image-tile:hover .image-rm { opacity: 1; }
 #detail .ai-sugg button { white-space: nowrap; }
 
 dialog {
