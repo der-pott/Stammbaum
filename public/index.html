@@ -2,115 +2,219 @@
 <html lang="de">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Stammbaum</title>
-  <link rel="stylesheet" href="styles.css?v=3">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#f3ead6" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1a1612" media="(prefers-color-scheme: dark)">
+  <meta name="description" content="Familien-Archiv der Familie Pott — fünf Generationen in Urkunden, Fotos und Namen.">
+  <title>Stammbaum · Familie Pott</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&display=swap">
+  <link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body>
-<header>
-  <h1>Stammbaum</h1>
-  <nav>
+
+<header class="masthead" role="banner">
+  <a href="#" class="brand" aria-label="Zur Übersicht">
+    <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true" width="22" height="22">
+      <path d="M12 2v20M4 7l8-5 8 5M4 17l8 5 8-5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <span class="brand-text">
+      <span class="brand-eyebrow">Familien-Archiv</span>
+      <span class="brand-name">Pott</span>
+    </span>
+  </a>
+
+  <nav class="actions" aria-label="Aktionen">
     <span id="role-badge" class="role-badge" hidden></span>
-    <button id="btn-add-person" data-editor hidden>+ Person</button>
-    <button id="btn-add-edge" data-editor hidden>+ Beziehung</button>
-    <button id="btn-import-gedcom" data-editor hidden>⬆ GEDCOM</button>
-    <button id="btn-reload" hidden>↻</button>
-    <button id="btn-logout" hidden>Logout</button>
+    <button id="btn-search-mobile" class="icon-btn" data-icon aria-label="Suche" title="Suche (⁠/⁠)">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M20 20l-4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    </button>
+    <button id="btn-theme" class="icon-btn" aria-label="Hell / Dunkel umschalten" title="Hell / Dunkel">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z" fill="currentColor"/></svg>
+    </button>
+    <button id="btn-help" class="icon-btn" aria-label="Tastatur-Kürzel" title="Tastatur-Kürzel (⁠?⁠)">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9.5 9a2.5 2.5 0 1 1 3.6 2.2c-.7.4-1.1 1-1.1 1.8v.5M12 17h.01" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    </button>
+    <button id="btn-add-person" class="pill-btn" data-editor hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true" width="16" height="16"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <span>Person</span>
+    </button>
+    <button id="btn-add-edge" class="pill-btn" data-editor hidden>Beziehung</button>
+    <button id="btn-import-gedcom" class="icon-btn" data-editor hidden aria-label="GEDCOM importieren" title="GEDCOM importieren">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button id="btn-logout" class="icon-btn" hidden aria-label="Abmelden" title="Abmelden">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
   </nav>
 </header>
 
-<main hidden id="app-main">
-  <aside id="list-panel">
-    <input id="search" placeholder="Suchen…" autocomplete="off">
-    <ul id="person-list"></ul>
+<main class="layout" id="app-main" hidden>
+
+  <aside class="pane pane-list" aria-label="Personen">
+    <div class="pane-head">
+      <label class="search" for="search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M20 20l-4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <input id="search" placeholder="Name, Ort, Jahr…" autocomplete="off" aria-label="Personen durchsuchen">
+        <kbd class="kbd">/</kbd>
+      </label>
+      <div id="list-meta" class="pane-meta"></div>
+    </div>
+    <ol id="person-list" class="person-list" aria-label="Alle Personen"></ol>
   </aside>
 
-  <section id="tree-panel">
-    <svg id="tree" xmlns="http://www.w3.org/2000/svg"></svg>
+  <section class="pane pane-tree" aria-label="Stammbaum" id="tree-pane">
+    <div class="tree-chrome">
+      <h1 class="tree-title">
+        <span class="eyebrow">Familie Pott</span>
+        Fünf Generationen auf einer Zeitachse
+      </h1>
+      <div class="tree-ctrl" role="group" aria-label="Baum-Steuerung">
+        <button id="btn-zoom-out" class="icon-btn tiny" aria-label="Verkleinern" title="−">−</button>
+        <button id="btn-zoom-fit" class="icon-btn tiny" aria-label="Einpassen" title="Einpassen">◇</button>
+        <button id="btn-zoom-in" class="icon-btn tiny" aria-label="Vergrößern" title="+">+</button>
+      </div>
+    </div>
+    <div class="tree-canvas" id="tree-canvas">
+      <svg id="tree" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Stammbaum-Diagramm"></svg>
+      <div id="tree-hover" class="tree-hover" hidden></div>
+    </div>
   </section>
 
-  <aside id="detail-panel">
-    <div id="detail-empty">Keine Person ausgewählt.</div>
-    <div id="detail" hidden></div>
+  <aside class="pane pane-detail" aria-label="Details" id="detail-pane">
+    <div id="detail-empty" class="detail-empty">
+      <svg viewBox="0 0 48 48" aria-hidden="true" class="empty-mark"><path d="M24 4v40M8 14l16-10 16 10M8 34l16 10 16-10" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round"/></svg>
+      <p>Wähle eine Person aus, um Urkunden, Lebensdaten und KI-Vorschläge zu sehen.</p>
+    </div>
+    <article id="detail" hidden></article>
   </aside>
 </main>
 
-<dialog id="login-dialog">
+<!-- Mobile drawer backdrop -->
+<div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
+
+<!-- Dialogs -->
+<dialog id="login-dialog" class="dlg dlg-login">
   <form method="dialog" id="login-form">
-    <h2>Anmelden</h2>
-    <label>Rolle
+    <h2 class="dlg-title">Willkommen zurück</h2>
+    <p class="dlg-sub">Das Pott-Archiv ist privat. Melde dich mit deiner PIN an.</p>
+    <label class="field">
+      <span>Rolle</span>
       <select name="role">
-        <option value="editor">Editor (Vollzugriff)</option>
-        <option value="viewer">Viewer (nur Lesen)</option>
+        <option value="editor">Editor · Vollzugriff</option>
+        <option value="viewer">Betrachter · nur Lesen</option>
       </select>
     </label>
-    <label>PIN
-      <input name="pin" type="password" autocomplete="current-password" required autofocus>
+    <label class="field">
+      <span>PIN</span>
+      <input name="pin" type="password" autocomplete="current-password" required autofocus inputmode="numeric">
     </label>
-    <div id="login-error" class="login-error" hidden></div>
-    <menu>
-      <button type="submit">Anmelden</button>
+    <div id="login-error" class="banner banner-err" hidden></div>
+    <menu class="dlg-actions">
+      <button type="submit" class="btn-primary">Anmelden</button>
     </menu>
   </form>
 </dialog>
 
-<dialog id="person-dialog">
+<dialog id="person-dialog" class="dlg">
   <form method="dialog" id="person-form">
-    <h2 id="person-dialog-title">Person</h2>
-    <label>Vorname <input name="given_name" maxlength="200"></label>
-    <label>Nachname <input name="surname" maxlength="200"></label>
-    <label>Geburtsname <input name="birth_name" maxlength="200"></label>
-    <label>Geschlecht
-      <select name="gender">
-        <option value="">—</option>
-        <option value="m">männlich</option>
-        <option value="f">weiblich</option>
-        <option value="x">divers</option>
-      </select>
-    </label>
-    <label>Geburt <input name="birth_date" placeholder="JJJJ-MM-TT oder frei"></label>
-    <label>Geburtsort <input name="birth_place"></label>
-    <label>Tod <input name="death_date" placeholder="JJJJ-MM-TT oder frei"></label>
-    <label>Sterbeort <input name="death_place"></label>
-    <label>Notizen <textarea name="notes" rows="3" maxlength="500"></textarea></label>
-    <menu>
-      <button type="button" data-close>Abbrechen</button>
-      <button type="submit">Speichern</button>
+    <h2 class="dlg-title" id="person-dialog-title">Person</h2>
+    <div class="grid-2">
+      <label class="field"><span>Vorname</span><input name="given_name" maxlength="200"></label>
+      <label class="field"><span>Nachname</span><input name="surname" maxlength="200"></label>
+      <label class="field"><span>Geburtsname</span><input name="birth_name" maxlength="200"></label>
+      <label class="field"><span>Rufname(n)</span><input name="nicknames" maxlength="200" placeholder="z. B. Max, Maximilian"></label>
+      <label class="field">
+        <span>Geschlecht</span>
+        <select name="gender">
+          <option value="">—</option>
+          <option value="m">männlich</option>
+          <option value="f">weiblich</option>
+          <option value="x">divers</option>
+        </select>
+      </label>
+      <label class="field"><span>Geboren</span><input name="birth_date" placeholder="JJJJ-MM-TT oder frei"></label>
+      <label class="field"><span>Geburtsort</span><input name="birth_place"></label>
+      <label class="field"><span>Gestorben</span><input name="death_date" placeholder="JJJJ-MM-TT oder frei"></label>
+      <label class="field"><span>Sterbeort</span><input name="death_place"></label>
+    </div>
+    <label class="field"><span>Notizen</span><textarea name="notes" rows="3" maxlength="500"></textarea></label>
+    <menu class="dlg-actions">
+      <button type="button" data-close class="btn-ghost">Abbrechen</button>
+      <button type="submit" class="btn-primary">Speichern</button>
     </menu>
   </form>
 </dialog>
 
-<dialog id="edge-dialog">
+<dialog id="edge-dialog" class="dlg">
   <form method="dialog" id="edge-form">
-    <h2>Beziehung anlegen</h2>
-    <label>Typ
+    <h2 class="dlg-title">Beziehung anlegen</h2>
+    <label class="field">
+      <span>Typ</span>
       <select name="type">
         <option value="parent">Elternteil → Kind</option>
         <option value="spouse">Ehepartner (beidseitig)</option>
       </select>
     </label>
-    <label>Von <select name="from_id"></select></label>
-    <label>Zu  <select name="to_id"></select></label>
-    <menu>
-      <button type="button" data-close>Abbrechen</button>
-      <button type="submit">Speichern</button>
+    <label class="field"><span>Von</span><select name="from_id"></select></label>
+    <label class="field"><span>Zu</span><select name="to_id"></select></label>
+    <menu class="dlg-actions">
+      <button type="button" data-close class="btn-ghost">Abbrechen</button>
+      <button type="submit" class="btn-primary">Speichern</button>
     </menu>
   </form>
 </dialog>
 
-<dialog id="import-dialog">
+<dialog id="import-dialog" class="dlg">
   <form method="dialog" id="import-form">
-    <h2>GEDCOM importieren</h2>
-    <p class="meta">Standardformat aus Ancestry, MyHeritage, Gramps, GEDitCOM. Max 2 MB. Personen und Beziehungen werden mit neuen IDs angelegt — kein Merge mit bestehenden Einträgen.</p>
-    <label>Datei <input name="file" type="file" accept=".ged,.gedcom,text/plain" required></label>
-    <div id="import-status" class="meta" hidden></div>
-    <menu>
-      <button type="button" data-close>Abbrechen</button>
-      <button type="submit">Importieren</button>
+    <h2 class="dlg-title">GEDCOM importieren</h2>
+    <p class="dlg-sub">Standardformat aus Ancestry, MyHeritage, Gramps, GEDitCOM. Max 2 MB. Personen und Beziehungen werden mit neuen IDs angelegt — kein Merge mit bestehenden Einträgen.</p>
+    <label class="field"><span>Datei</span><input name="file" type="file" accept=".ged,.gedcom,text/plain" required></label>
+    <div id="import-status" class="banner" hidden></div>
+    <menu class="dlg-actions">
+      <button type="button" data-close class="btn-ghost">Abbrechen</button>
+      <button type="submit" class="btn-primary">Importieren</button>
     </menu>
   </form>
 </dialog>
 
-<script src="stammbaum.js?v=3" defer></script>
+<dialog id="help-dialog" class="dlg">
+  <form method="dialog">
+    <h2 class="dlg-title">Tastatur-Kürzel</h2>
+    <dl class="kbd-list">
+      <dt><kbd>/</kbd></dt><dd>Suche fokussieren</dd>
+      <dt><kbd>n</kbd></dt><dd>Neue Person (Editor)</dd>
+      <dt><kbd>e</kbd></dt><dd>Neue Beziehung (Editor)</dd>
+      <dt><kbd>?</kbd></dt><dd>Diese Übersicht</dd>
+      <dt><kbd>Esc</kbd></dt><dd>Panel / Dialog schließen</dd>
+      <dt><kbd>+</kbd> / <kbd>−</kbd></dt><dd>Baum zoomen</dd>
+      <dt><kbd>0</kbd></dt><dd>Baum einpassen</dd>
+      <dt><kbd>t</kbd></dt><dd>Hell / Dunkel</dd>
+    </dl>
+    <menu class="dlg-actions">
+      <button type="submit" class="btn-primary">Verstanden</button>
+    </menu>
+  </form>
+</dialog>
+
+<!-- Lightbox -->
+<div id="lightbox" class="lightbox" hidden role="dialog" aria-modal="true" aria-label="Dokument-Vollansicht">
+  <button class="lightbox-close icon-btn" id="lightbox-close" aria-label="Schließen">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6l-12 12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+  </button>
+  <button class="lightbox-nav lightbox-prev icon-btn" id="lightbox-prev" aria-label="Vorheriges">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <button class="lightbox-nav lightbox-next icon-btn" id="lightbox-next" aria-label="Nächstes">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <div class="lightbox-stage" id="lightbox-stage">
+    <img id="lightbox-img" alt="">
+  </div>
+  <div class="lightbox-caption" id="lightbox-caption"></div>
+</div>
+
+<script src="stammbaum.js?v=4" defer></script>
 </body>
 </html>

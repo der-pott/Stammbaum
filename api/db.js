@@ -17,6 +17,7 @@ db.exec(`
     given_name  TEXT,
     surname     TEXT,
     birth_name  TEXT,
+    nicknames   TEXT,
     gender      TEXT,
     birth_date  TEXT,
     birth_place TEXT,
@@ -90,6 +91,13 @@ db.exec(`
     detail TEXT
   );
 `);
+
+// Idempotente Migration: Spalte in bestehender Tabelle anlegen falls fehlt.
+// SQLite kennt kein ADD COLUMN IF NOT EXISTS; wir prüfen via PRAGMA.
+const existingCols = new Set(db.prepare('PRAGMA table_info(persons)').all().map(c => c.name));
+if (!existingCols.has('nicknames')) {
+  db.exec('ALTER TABLE persons ADD COLUMN nicknames TEXT');
+}
 
 export function nowIso() { return new Date().toISOString(); }
 export function newId()  { return randomUUID(); }

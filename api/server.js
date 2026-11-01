@@ -34,7 +34,7 @@ const COOKIE_OPTS = {
 };
 
 const PERSON_FIELDS = [
-  'given_name','surname','birth_name','gender',
+  'given_name','surname','birth_name','nicknames','gender',
   'birth_date','birth_place','death_date','death_place','notes'
 ];
 
@@ -133,12 +133,12 @@ app.post('/api/persons', requireEditor, (req, res) => {
   const id = newId();
   const now = nowIso();
   db.prepare(`
-    INSERT INTO persons (id, given_name, surname, birth_name, gender,
+    INSERT INTO persons (id, given_name, surname, birth_name, nicknames, gender,
       birth_date, birth_place, death_date, death_place, notes, created_at, updated_at)
-    VALUES (@id,@given_name,@surname,@birth_name,@gender,
+    VALUES (@id,@given_name,@surname,@birth_name,@nicknames,@gender,
       @birth_date,@birth_place,@death_date,@death_place,@notes,@created_at,@updated_at)
   `).run({
-    id, given_name:null, surname:null, birth_name:null, gender:null,
+    id, given_name:null, surname:null, birth_name:null, nicknames:null, gender:null,
     birth_date:null, birth_place:null, death_date:null, death_place:null, notes:null,
     ...data, created_at: now, updated_at: now,
   });

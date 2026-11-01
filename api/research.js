@@ -28,14 +28,16 @@ export function createAnthropicClient() {
 
 function formatRelative(p, roleLabel) {
   const parts = [p.given_name, p.surname].filter(Boolean).join(' ') || '(ohne Namen)';
+  const nick = p.nicknames ? ` [Rufname: ${p.nicknames}]` : '';
   const dates = [p.birth_date && `*${p.birth_date}`, p.death_date && `†${p.death_date}`].filter(Boolean).join(', ');
   const place = p.birth_place ? ` in ${p.birth_place}` : '';
-  return `- ${roleLabel}: ${parts}${dates ? ' (' + dates + place + ')' : place}`;
+  return `- ${roleLabel}: ${parts}${nick}${dates ? ' (' + dates + place + ')' : place}`;
 }
 
 export function buildUserPrompt(person, extra, known) {
   const facts = [
-    person.given_name && `Vorname: ${person.given_name}`,
+    person.given_name && `Vorname(n): ${person.given_name}`,
+    person.nicknames && `Rufname(n) / weitere bekannte Namensformen: ${person.nicknames}`,
     person.surname && `Nachname: ${person.surname}`,
     person.birth_name && `Geburtsname: ${person.birth_name}`,
     person.gender && `Geschlecht: ${person.gender}`,
