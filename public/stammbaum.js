@@ -254,6 +254,24 @@ function select(id) {
 }
 
 /* --- Tree layout: timeline-based ------------------------------------ */
+// text metrics cache
+const _measureCanvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(400, 50) : null;
+const _measureCtx = _measureCanvas?.getContext('2d');
+function measureText(str, font = '600 14px "Instrument Sans", sans-serif') {
+  if (!_measureCtx) return str.length * 8;
+  _measureCtx.font = font;
+  return _measureCtx.measureText(str).width;
+}
+function nodeSizeFor(person) {
+  const label = primaryNameOf(person);
+  const dates = fmtLifeShort(person);
+  const nameW = measureText(label, '600 14px "Instrument Sans", sans-serif');
+  const dateW = measureText(dates, '400 12px "Instrument Sans", sans-serif');
+  const inner = Math.max(nameW, dateW);
+  const w = Math.min(300, Math.max(140, Math.ceil(inner) + 48 + 16)); // avatar 32 + gap + padding
+  return { w, h: 60 };
+}
+
 function computeLayout() {
   if (!state.persons.length) return null;
 
@@ -327,20 +345,21 @@ function computeLayout() {
     (genGroups.get(g) ?? genGroups.set(g, []).get(g)).push(p);
   }
   const nodes = [];
-  const nodeW = 150, nodeH = 70;
+  const nodeH = 60;
   for (const [g, people] of [...genGroups].sort((a, b) => a[0] - b[0])) {
     people.sort((a, b) => yearOf.get(a.id) - yearOf.get(b.id));
     const placed = [];
     for (const p of people) {
+      const { w, h } = nodeSizeFor(p);
       const yr = yearOf.get(p.id);
       let x = marginL + (yr - minY) * pxPerYear;
       let tries = 0;
-      while (placed.some(q => Math.abs(q.x - x) < nodeW + 20) && tries < 60) {
-        x += (nodeW + 20) / 2; tries++;
+      while (placed.some(q => Math.abs(q.x - x) < Math.max(q.w, w) + 24) && tries < 60) {
+        x += (w + 24) / 2; tries++;
       }
       const y = marginT + g * rowH;
-      nodes.push({ id: p.id, person: p, x, y, w: nodeW, h: nodeH, year: yr });
-      placed.push({ x });
+      nodes.push({ id: p.id, person: p, x, y, w, h, year: yr });
+      placed.push({ x, w });
     }
   }
   const posById = new Map(nodes.map(n => [n.id, n]));
@@ -462,15 +481,14 @@ function renderTree() {
     init.setAttribute('dy', '0');
     g.appendChild(init);
 
-    // name — prefer nickname if present
+    // name — prefer nickname if present. Node is sized to fit, so no ellipsis.
     const nmText = primaryNameOf(n.person);
-    const nmDisplay = nmText.length > 22 ? nmText.slice(0, 21) + '…' : nmText;
-    const nameT = textEl(42, n.h / 2 - 4, nmDisplay, { cls: 'node-name' });
+    const nameT = textEl(42, n.h / 2 - 6, nmText, { cls: 'node-name' });
     g.appendChild(nameT);
 
     const dates = fmtLifeShort(n.person);
     if (dates) {
-      const dT = textEl(42, n.h / 2 + 14, dates, { cls: 'node-dates' });
+      const dT = textEl(42, n.h / 2 + 12, dates, { cls: 'node-dates' });
       g.appendChild(dT);
     }
 
@@ -504,15 +522,23 @@ function showNodeHover(n) {
   if (p.birth_date) bits.push(`* ${p.birth_date}${p.birth_place ? ', ' + p.birth_place : ''}`);
   if (p.death_date) bits.push(`✝ ${p.death_date}${p.death_place ? ', ' + p.death_place : ''}`);
   el.innerHTML = '';
-  el.appendChild(h('h4', {}, nameOf(p)));
+  el.appendChild(h('h4', {}, fullNameOf(p)));
   for (const b of bits) el.appendChild(h('div', { class: 'meta' }, b));
-  if (p.notes) el.appendChild(h('div', { class: 'note' }, p.notes.slice(0, 100) + (p.notes.length > 100 ? '…' : '')));
+  if (p.notes) el.appendChild(h('div', { class: 'note' }, p.notes.slice(0, 110) + (p.notes.length > 110 ? '…' : '')));
   el.hidden = false;
+  // Position to the right of the node, clamped to viewport.
   const canvasRect = document.getElementById('tree-canvas').getBoundingClientRect();
-  const screenX = (n.x + n.w / 2) * state.pz.k + state.pz.x;
-  const screenY = n.y * state.pz.k + state.pz.y;
-  el.style.left = screenX + 'px';
-  el.style.top = screenY + 'px';
+  const nodeRight = (n.x + n.w) * state.pz.k + state.pz.x;
+  const nodeTop = n.y * state.pz.k + state.pz.y;
+  const hoverW = el.offsetWidth || 240;
+  const hoverH = el.offsetHeight || 100;
+  let left = nodeRight + 12;
+  let top = nodeTop;
+  if (left + hoverW > canvasRect.width - 12) left = Math.max(12, (n.x * state.pz.k + state.pz.x) - hoverW - 12);
+  if (top + hoverH > canvasRect.height - 12) top = Math.max(12, canvasRect.height - hoverH - 12);
+  el.style.left = left + 'px';
+  el.style.top = top + 'px';
+  el.style.transform = 'none';
 }
 function hideNodeHover() {
   document.getElementById('tree-hover').hidden = true;
