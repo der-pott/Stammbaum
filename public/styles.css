@@ -591,6 +591,7 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
 .sub-row {
   position: relative;
   padding: var(--sp-3);
+  padding-right: 72px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--paper);
@@ -610,21 +611,23 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
 }
 .sub-rm,
 .sub-edit {
-  position: absolute; top: 6px;
-  width: 22px; height: 22px; border-radius: 999px;
-  color: var(--ink-faint);
-  font-size: 14px; line-height: 22px;
-  opacity: 0.3; transition: opacity 0.15s, color 0.15s, background 0.15s;
+  position: absolute; top: 50%;
+  transform: translateY(-50%);
+  width: 28px; height: 28px; border-radius: 999px;
+  color: var(--ink-soft);
+  background: var(--paper-sunk);
+  border: 1px solid var(--line);
+  font-size: 15px; line-height: 1;
+  opacity: 0.85; transition: opacity 0.15s, color 0.15s, background 0.15s, border-color 0.15s;
   display: grid; place-items: center;
 }
-.sub-rm { right: 6px; }
-.sub-edit { right: 32px; color: var(--seal); }
-.sub-edit svg { display: block; }
+.sub-rm { right: 8px; }
+.sub-edit { right: 42px; color: var(--seal); }
+.sub-edit svg { display: block; width: 14px; height: 14px; }
 .sub-row:hover .sub-rm,
 .sub-row:hover .sub-edit { opacity: 1; }
-.sub-edit:hover { background: var(--accent-soft); }
-.sub-rm:hover { background: var(--accent-soft); color: var(--err); }
-.sub-rm:hover { color: var(--err); }
+.sub-edit:hover { background: var(--accent-soft); border-color: var(--seal); }
+.sub-rm:hover { background: var(--accent-soft); color: var(--err); border-color: var(--err); }
 
 /* Biography */
 .bio-body { font-family: var(--font-display); font-size: 15px; line-height: 1.65; color: var(--ink); }

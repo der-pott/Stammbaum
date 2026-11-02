@@ -835,14 +835,15 @@ function renderTree() {
   svg.setAttribute('viewBox', `0 0 ${cw} ${ch}`);
   svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
 
-  // clipPaths for round portraits (one per node, keyed on id)
+  // clipPaths for round portraits — coordinates are in each node-group's LOCAL
+  // space (same space the <image> sits in), not world space.
   const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
   for (const n of nodes) {
     const cp = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath');
     cp.setAttribute('id', 'clip-' + n.id);
     const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    c.setAttribute('cx', n.cx);
-    c.setAttribute('cy', n.y + AVATAR_R);
+    c.setAttribute('cx', NODE_W / 2);
+    c.setAttribute('cy', AVATAR_R);
     c.setAttribute('r', AVATAR_R);
     cp.appendChild(c);
     defs.appendChild(cp);
