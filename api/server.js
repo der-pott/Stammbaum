@@ -197,7 +197,7 @@ app.get('/api/persons/:id', requireViewer, (req, res) => {
   const images = db.prepare(`
     SELECT i.id, i.mime, i.bytes, i.caption, i.taken_at, pi.role
     FROM images i JOIN person_images pi ON pi.image_id = i.id
-    WHERE pi.person_id = ? ORDER BY i.created_at
+    WHERE pi.person_id = ? ORDER BY COALESCE(i.taken_at, i.created_at) ASC
   `).all(req.params.id);
   res.json({ person, edges, images });
 });
@@ -361,7 +361,7 @@ app.post('/api/ai/research', requireEditor, aiLimiter, async (req, res) => {
 });
 
 app.get('/api/ai/runs/:person_id', requireViewer, (req, res) => {
-  const rows = db.prepare('SELECT id, prompt, model, status, created_at, completed_at FROM ai_runs WHERE person_id=? ORDER BY created_at DESC LIMIT 20')
+  const rows = db.prepare('SELECT id, prompt, model, status, created_at, completed_at FROM ai_runs WHERE person_id=? ORDER BY created_at ASC LIMIT 20')
     .all(req.params.person_id);
   res.json(rows);
 });
@@ -725,7 +725,7 @@ app.get('/api/persons/:id/research/consensus', requireViewer, (req, res) => {
 });
 
 app.get('/api/persons/:id/research/hits', requireViewer, (req, res) => {
-  const rows = db.prepare(`SELECT * FROM research_hits WHERE person_id=? ORDER BY created_at DESC`)
+  const rows = db.prepare(`SELECT * FROM research_hits WHERE person_id=? ORDER BY created_at ASC`)
     .all(req.params.id);
   res.json(rows.map(r => ({ ...r, payload: safeJson(r.payload) })));
 });

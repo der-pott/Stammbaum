@@ -269,6 +269,19 @@ function fmtDateDisplay(raw) {
   return s;
 }
 
+// For storage: German "21.07.1983" → ISO "1983-07-21". Keeps DB sortable chronologically.
+// Also accepts "21071983" / "210783" / "21-07-83" via parseGermanDate first, then normalizes.
+// Free text (unknown shape) is passed through unchanged.
+function toIsoDate(raw) {
+  if (!raw) return raw;
+  const german = parseGermanDate(raw);
+  const m = String(german).match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  const iso = String(german).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return german;
+  return german; // free text
+}
+
 // Legacy name retained for callers; now defers to fmtDateDisplay.
 function fmtDate(raw) { return fmtDateDisplay(raw); }
 
@@ -1187,16 +1200,18 @@ function zoomBy(f) {
 
 /* --- Detail --------------------------------------------------------- */
 function relationsOf(id) {
-  const parents = state.edges.filter(e => e.type === 'parent' && e.to_id === id).map(e => state.persons.find(x => x.id === e.from_id)).filter(Boolean);
-  const children = state.edges.filter(e => e.type === 'parent' && e.from_id === id).map(e => state.persons.find(x => x.id === e.to_id)).filter(Boolean);
+  const byBirth = (a, b) => (year(a.birth_date) || '9999').localeCompare(year(b.birth_date) || '9999');
+  const parents = state.edges.filter(e => e.type === 'parent' && e.to_id === id).map(e => state.persons.find(x => x.id === e.from_id)).filter(Boolean).sort(byBirth);
+  const children = state.edges.filter(e => e.type === 'parent' && e.from_id === id).map(e => state.persons.find(x => x.id === e.to_id)).filter(Boolean).sort(byBirth);
   const spouses = state.edges.filter(e => e.type === 'spouse' && (e.from_id === id || e.to_id === id))
-    .map(e => ({ p: state.persons.find(x => x.id === (e.from_id === id ? e.to_id : e.from_id)), since: e.since, until: e.until }))
-    .filter(x => x.p);
+    .map(e => ({ p: state.persons.find(x => x.id === (e.from_id === id ? e.to_id : e.from_id)), since: e.since, until: e.until, status: e.status }))
+    .filter(x => x.p)
+    .sort((a, b) => (a.since || '9999').localeCompare(b.since || '9999') || byBirth(a.p, b.p));
   // Siblings
   const myParents = parents.map(x => x.id);
   const siblings = myParents.length
     ? [...new Set(state.edges.filter(e => e.type === 'parent' && myParents.includes(e.from_id) && e.to_id !== id).map(e => e.to_id))]
-      .map(sid => state.persons.find(x => x.id === sid)).filter(Boolean)
+      .map(sid => state.persons.find(x => x.id === sid)).filter(Boolean).sort(byBirth)
     : [];
   return { parents, children, spouses, siblings };
 }
@@ -1597,7 +1612,7 @@ function openSubDialog(kind, personId, existing = null) {
     const data = Object.fromEntries(new FormData(form));
     for (const f of fields) if (f.type === 'checkbox') data[f.name] = form.querySelector(`[name="${f.name}"]`).checked ? '1' : '';
     for (const [k, v] of Object.entries(data)) {
-      if (/date|_at$|^date$|since|until|start|end/i.test(k)) data[k] = parseGermanDate(v);
+      if (/date|_at$|^date$|since|until|start|end/i.test(k)) data[k] = toIsoDate(v);
     }
     try {
       if (isEdit) await api.updateSub(personId, kind, existing.id, data);
@@ -2152,7 +2167,7 @@ function openPersonDialog(p = null) {
     ev.preventDefault();
     const data = Object.fromEntries(new FormData(form));
     for (const [k, v] of Object.entries(data)) {
-      if (/date|_at$/i.test(k)) data[k] = parseGermanDate(v);
+      if (/date|_at$/i.test(k)) data[k] = toIsoDate(v);
     }
     try {
       if (p) await api.update(p.id, data);
@@ -2204,7 +2219,7 @@ function openEdgeDialog(existing = null) {
     ev.preventDefault();
     const data = Object.fromEntries(new FormData(form));
     for (const [k, v] of Object.entries(data)) {
-      if (/since|until/i.test(k)) data[k] = parseGermanDate(v);
+      if (/since|until/i.test(k)) data[k] = toIsoDate(v);
     }
     try {
       if (isEdit) {
