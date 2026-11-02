@@ -30,6 +30,13 @@ import * as github from './sources/github.js';
 import * as googlebooks from './sources/googlebooks.js';
 import * as mastodon from './sources/mastodon.js';
 import * as googlecse from './sources/googlecse.js';
+import * as zlb_adressbuecher from './sources/zlb_adressbuecher.js';
+import * as landesarchiv_berlin from './sources/landesarchiv_berlin.js';
+import * as trauer from './sources/trauer.js';
+import * as gedenkseiten from './sources/gedenkseiten.js';
+import * as onlinegedenken from './sources/onlinegedenken.js';
+import * as geneanet from './sources/geneanet.js';
+import * as europeana from './sources/europeana.js';
 import { activeBackend } from './search_backend.js';
 
 const WEB_SEARCH_AVAILABLE = !!activeBackend();
@@ -64,6 +71,14 @@ export const SOURCES = {
   github:        { label: 'GitHub',                      impl: github.search, active: true, note: 'nur Lebende / nach 1990' },
   googlebooks:   { label: 'Google Books',                impl: googlebooks.search, active: true },
   mastodon:      { label: 'Mastodon',                    impl: mastodon.search, active: true, note: 'nur Lebende / nach 1990' },
+  // --- Deutsche Archive & Nachrufe (Firecrawl-ready) -----------------------
+  zlb_adressbuecher:   { label: 'Berliner Adressbuecher 1799-1943 (ZLB)', impl: zlb_adressbuecher.search, active: true, note: 'nur bei Berlin-Bezug' },
+  landesarchiv_berlin: { label: 'Landesarchiv Berlin',                     impl: landesarchiv_berlin.search, active: true },
+  trauer:              { label: 'Trauer.de (Nachrufe)',                    impl: trauer.search, active: true, note: 'nur nach 1990' },
+  gedenkseiten:        { label: 'Gedenkseiten.de',                         impl: gedenkseiten.search, active: true, note: 'nur nach 1990' },
+  onlinegedenken:      { label: 'Online Gedenken',                         impl: onlinegedenken.search, active: true, note: 'nur nach 1990' },
+  geneanet:            { label: 'Geneanet (oeffentlich)',                  impl: geneanet.search, active: true },
+  europeana:           { label: 'Europeana',                               impl: europeana.search, active: !!process.env.EUROPEANA_API_KEY, note: process.env.EUROPEANA_API_KEY ? null : 'braucht EUROPEANA_API_KEY' },
 };
 
 // Only active sources are fanned out by default; inactive ones are listed via

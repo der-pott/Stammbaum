@@ -60,3 +60,18 @@ Zu prüfen und pro Treffer ein eigener Eintrag in die passende Sub-Ressource:
 Format der `notes` bei strukturierten Einträgen: eine Zeile pro Fakt mit Quellen-Hinweis in Klammern, z. B. `"Belegt durch Personalausweis Britische Zone, A Nr. 175672, Kennbuchstaben EHD"`.
 
 Immer in der Antwort an den User **auflisten**, welche strukturierten Einträge aus einem Dokument hinzugefügt wurden — nicht nur „habe das Bild verknüpft".
+
+## Scrape-Backend-Wechsel
+
+Alle Scraper in `api/sources/*.js` nutzen `fetchPage()` aus `api/scrape_fetcher.js`
+für HTML-Scrapes, nie direkten `fetch`. `fetchPage` wählt Backend per Env:
+
+- `FIRECRAWL_URL` gesetzt → Scrape über Firecrawl-Self-Hosted (`/v1/scrape`, Playwright-Browser, umgeht IP-Blocks).
+- Sonst → direkter `httpGet` aus `http.js` (UA + Rate-Limit + Log).
+
+Umstellung auf Firecrawl = zwei .env-Zeilen plus `docker compose restart api`.
+Blockierte Scraper geben eine `needs_firecrawl: true`-Card zurück (keine Crashes),
+die nach Firecrawl-Aktivierung transparent zu echten Treffern wird.
+
+JSON-APIs (DNB SRU, CrossRef, OpenLibrary, Wikidata, Europeana, Mastodon) nutzen
+`fetchJson()` und laufen immer direkt — Firecrawl ist nur für HTML-Scrape-Blocker.
