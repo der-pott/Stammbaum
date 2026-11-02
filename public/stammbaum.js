@@ -2074,6 +2074,8 @@ function renderDetail() {
   el.appendChild(subSection('residences', 'Wohnorte', p.id, renderResidence));
   // ---- Militärdienst ------------------------------------------------
   el.appendChild(subSection('military', 'Militärdienst', p.id, renderMilitary));
+  // ---- Lebensereignisse ---------------------------------------------
+  el.appendChild(subSection('life-events', 'Lebensereignisse', p.id, renderLifeEvent));
   // ---- Anekdoten ----------------------------------------------------
   el.appendChild(subSection('anecdotes', 'Anekdoten & Erinnerungen', p.id, renderAnecdote));
   // ---- Gesundheit (editor only) -------------------------------------
@@ -2331,6 +2333,16 @@ function renderHealth(e) {
     e.notes ? h('div', { class: 'sub-note' }, e.notes) : null,
   );
 }
+function renderLifeEvent(e) {
+  const dateStr = fmtDateDisplay(e.date);
+  return h('div', { class: 'sub-row' },
+    h('div', { class: 'sub-title' }, e.title),
+    h('div', { class: 'sub-sub' }, [e.category, e.place].filter(Boolean).join(' · ')),
+    h('div', { class: 'sub-range' }, dateStr || ''),
+    e.description ? h('div', { class: 'sub-text' }, e.description) : null,
+    e.notes ? h('div', { class: 'sub-note' }, e.notes) : null,
+  );
+}
 
 const SUB_FIELDS = {
   education: [
@@ -2384,13 +2396,27 @@ const SUB_FIELDS = {
     { name: 'hereditary', label: 'erblich?', type: 'checkbox' },
     { name: 'notes',      label: 'Notiz', type: 'textarea' },
   ],
+  'life-events': [
+    { name: 'category',    label: 'Kategorie', type: 'text', required: true, placeholder: 'z. B. Konfirmation, Auswanderung, Preisverleihung', list: 'life-event-categories' },
+    { name: 'title',       label: 'Titel',     type: 'text', required: true, placeholder: 'kurze Bezeichnung' },
+    { name: 'date',        label: 'Datum',     type: 'text', placeholder: 'TT.MM.JJJJ' },
+    { name: 'place',       label: 'Ort',       type: 'text' },
+    { name: 'description', label: 'Beschreibung', type: 'textarea' },
+    { name: 'notes',       label: 'Notiz',     type: 'textarea' },
+  ],
 };
+const LIFE_EVENT_CATEGORIES = [
+  'Konfirmation','Taufe','Erstkommunion','Firmung','Auswanderung','Einwanderung','Umzug',
+  'Reise','Preisverleihung','Ehrenamt','Vereinsgründung','Sportlicher Erfolg',
+  'Berufliches Ereignis','Soldat vereidigt','Entlassung','Schulabschluss','Ehrung','Andere',
+];
 
 function openSubDialog(kind, personId, existing = null) {
   const dlg = document.getElementById('sub-dialog') || createSubDialog();
   const form = dlg.querySelector('form');
   form.innerHTML = '';
-  const title = { jobs: 'Beruf', education: 'Ausbildung / Studium', residences: 'Wohnort', military: 'Militärdienst', anecdotes: 'Anekdote', 'health-events': 'Gesundheitseintrag' }[kind];
+  const title = { jobs: 'Beruf', education: 'Ausbildung / Studium', residences: 'Wohnort', military: 'Militärdienst', anecdotes: 'Anekdote', 'health-events': 'Gesundheitseintrag', 'life-events': 'Lebensereignis' }[kind];
+  if (kind === 'life-events') ensureLifeEventCategoryList();
   const isEdit = !!existing;
   form.appendChild(h('h2', { class: 'dlg-title' }, (isEdit ? 'Eintrag bearbeiten · ' : 'Neuer Eintrag · ') + title));
   const fields = SUB_FIELDS[kind] || [];
@@ -2403,6 +2429,7 @@ function openSubDialog(kind, personId, existing = null) {
     else input = h('input', { type: 'text', name: f.name, maxlength: '400' });
     if (f.placeholder) input.setAttribute('placeholder', f.placeholder);
     if (f.required) input.setAttribute('required', '');
+    if (f.list) input.setAttribute('list', f.list);
     if (isEdit && existing[f.name] != null) {
       if (f.type === 'checkbox') input.checked = !!Number(existing[f.name]);
       else if (/date|_at$|^date$|since|until|start|end/i.test(f.name)) input.value = fmtDateDisplay(existing[f.name]);
@@ -2445,6 +2472,17 @@ function createSubDialog() {
   dlg.appendChild(h('form', { method: 'dialog', id: 'sub-form' }));
   document.body.appendChild(dlg);
   return dlg;
+}
+function ensureLifeEventCategoryList() {
+  if (document.getElementById('life-event-categories')) return;
+  const list = document.createElement('datalist');
+  list.id = 'life-event-categories';
+  for (const c of LIFE_EVENT_CATEGORIES) {
+    const o = document.createElement('option');
+    o.value = c;
+    list.appendChild(o);
+  }
+  document.body.appendChild(list);
 }
 
 /* --- biography ------------------------------------------------------ */

@@ -682,6 +682,7 @@ const SUB_RESOURCES = {
   anecdotes:         { table: 'anecdotes',        cols: ['title','text','source','year'], order: 'COALESCE(year, created_at)' },
   'health-events':   { table: 'health_events',    cols: ['condition','date','date_precision','hereditary','notes'], editorOnlyRead: true, order: 'COALESCE(date, created_at)' },
   education:         { table: 'education',        cols: ['institution','field','degree','place','start_date','start_date_precision','end_date','end_date_precision','notes'], order: 'COALESCE(start_date, created_at)' },
+  'life-events':     { table: 'life_events',      cols: ['category','title','date','date_precision','place','description','notes'], order: 'COALESCE(date, created_at)' },
 };
 
 function sanitizeSub(cfg, body) {
@@ -718,6 +719,11 @@ for (const [kind, cfg] of Object.entries(SUB_RESOURCES)) {
     if (kind === 'residences' && !data.place) {
       const parts = [data.street, data.postal_code, data.city, data.district && `(${data.district})`].filter(Boolean);
       data.place = parts.length ? parts.join(' ') : (data.city || data.street || 'unbekannt');
+    }
+    // life-events: category + title NOT NULL
+    if (kind === 'life-events') {
+      if (!data.category) return res.status(400).json({ error: 'category required' });
+      if (!data.title) return res.status(400).json({ error: 'title required' });
     }
     const id = newId();
     const now = nowIso();
@@ -780,11 +786,12 @@ function gatherBioContext(personId) {
   const anecdotes  = db.prepare('SELECT * FROM anecdotes WHERE person_id=? ORDER BY year').all(personId);
   const military   = db.prepare('SELECT * FROM military_service WHERE person_id=? ORDER BY start_date').all(personId);
   const health     = db.prepare('SELECT * FROM health_events WHERE person_id=? ORDER BY date').all(personId);
+  const lifeEvents = db.prepare('SELECT * FROM life_events WHERE person_id=? AND deleted_at IS NULL ORDER BY date').all(personId);
   const docCaptions = db.prepare(`
     SELECT i.caption, pi.role FROM images i JOIN person_images pi ON pi.image_id=i.id
     WHERE pi.person_id=? AND i.caption IS NOT NULL
   `).all(personId).map(r => [r.role, r.caption].filter(Boolean).join(': '));
-  return { person, parents, spouses, children, siblings, jobs, education, residences, anecdotes, military, health, docCaptions };
+  return { person, parents, spouses, children, siblings, jobs, education, residences, anecdotes, military, health, lifeEvents, docCaptions };
 }
 
 app.get('/api/persons/:id/biography', requireViewer, (req, res) => {

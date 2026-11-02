@@ -315,6 +315,37 @@ db.exec(`
     dismissed_at TEXT NOT NULL,
     dismissed_by TEXT
   );
+
+  -- Life Events: Lebensereignisse die nicht in jobs/residences/military passen
+  -- (Konfirmation, Taufe, Auswanderung, Preisverleihung, Ehrenamt, ...)
+  CREATE TABLE IF NOT EXISTS life_events (
+    id              TEXT PRIMARY KEY,
+    person_id       TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    category        TEXT NOT NULL,
+    title           TEXT NOT NULL,
+    date            TEXT,
+    date_precision  TEXT DEFAULT 'EXACT',
+    place           TEXT,
+    description     TEXT,
+    notes           TEXT,
+    created_at      TEXT NOT NULL,
+    deleted_at      TEXT,
+    deleted_by      TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_le_person ON life_events(person_id);
+  CREATE INDEX IF NOT EXISTS idx_le_date ON life_events(date);
+  CREATE INDEX IF NOT EXISTS idx_life_events_live ON life_events(deleted_at);
+
+  -- Undo/Redo: Action-Log fuer letzte Mutationen pro Session
+  CREATE TABLE IF NOT EXISTS action_log (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_token  TEXT NOT NULL,
+    ts             TEXT NOT NULL,
+    action         TEXT NOT NULL,
+    label          TEXT,
+    undone         INTEGER DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS idx_action_log_session ON action_log(session_token, id);
 `);
 
 export function nowIso() { return new Date().toISOString(); }
