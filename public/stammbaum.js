@@ -1010,41 +1010,55 @@ function relationsOf(id) {
 function renderDetail() {
   const emptyEl = document.getElementById('detail-empty');
   const el = document.getElementById('detail');
-  if (!state.selected) { emptyEl.hidden = false; el.hidden = true; return; }
+  const pane = document.querySelector('.pane-detail');
+  if (!state.selected) {
+    emptyEl.hidden = false; el.hidden = true;
+    pane?.classList.remove('expanded');
+    return;
+  }
   const p = state.persons.find(x => x.id === state.selected);
-  if (!p) { emptyEl.hidden = false; el.hidden = true; return; }
+  if (!p) { emptyEl.hidden = false; el.hidden = true; pane?.classList.remove('expanded'); return; }
   emptyEl.hidden = true; el.hidden = false;
+  pane?.classList.add('expanded');
 
   const { parents, children, spouses, siblings } = relationsOf(p.id);
-
   el.innerHTML = '';
 
-  const head = h('div', { class: 'detail-head' },
+  // ---- Hero ----------------------------------------------------------
+  const hero = h('div', { class: 'dossier-hero' },
     (() => {
       const btn = h('button', { class: 'detail-close icon-btn', 'aria-label': 'Schließen' });
       btn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6l-12 12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/></svg>';
-      btn.onclick = () => closeDrawers();
+      btn.onclick = () => { state.selected = null; render(); closeDrawers(); };
       return btn;
     })(),
-    h('span', { class: 'detail-eyebrow' }, [
-      year(p.birth_date) || '?',
-      p.birth_place || p.death_place || null,
-    ].filter(Boolean).join(' · ')),
     (() => {
-      const h2 = h('h2', {}, primaryNameOf(p));
-      if (hasAltName(p)) {
-        h2.appendChild(h('em', {}, nameOf(p)));
-      } else if (p.birth_name && p.birth_name !== p.surname) {
-        h2.appendChild(h('em', {}, 'geborene ' + p.birth_name));
+      const portrait = h('div', { class: 'dossier-portrait' });
+      if (p.portrait_image_id) {
+        portrait.appendChild(h('img', { src: '/api/images/' + p.portrait_image_id, alt: nameOf(p) }));
+      } else {
+        portrait.appendChild(h('span', { class: 'dossier-initials' }, initialsOf(p)));
       }
-      return h2;
+      return portrait;
     })(),
+    h('div', { class: 'dossier-id' },
+      h('span', { class: 'dossier-eyebrow' }, [
+        p.birth_place || p.death_place || null,
+        yearRange(p),
+      ].filter(Boolean).join(' · ')),
+      (() => {
+        const h2 = h('h2', {}, primaryNameOf(p));
+        if (hasAltName(p)) h2.appendChild(h('em', {}, nameOf(p)));
+        else if (p.birth_name && p.birth_name !== p.surname) h2.appendChild(h('em', {}, 'geborene ' + p.birth_name));
+        return h2;
+      })(),
+    ),
   );
-  el.appendChild(head);
+  el.appendChild(hero);
 
-  // Lifespan panel
+  // ---- Lifespan ------------------------------------------------------
   if (p.birth_date || p.death_date || p.birth_place || p.death_place) {
-    const span = h('div', { class: 'lifespan' },
+    el.appendChild(h('div', { class: 'lifespan' },
       h('div', { class: 'born' },
         h('b', {}, p.birth_date || '?'),
         p.birth_place ? h('small', {}, 'geboren in ' + p.birth_place) : null,
@@ -1054,45 +1068,87 @@ function renderDetail() {
         p.death_date ? h('b', {}, p.death_date) : h('b', {}, '—'),
         p.death_place ? h('small', {}, 'gestorben in ' + p.death_place) : null,
       ),
-    );
-    el.appendChild(span);
-  }
-
-  if (p.notes) {
-    el.appendChild(h('div', { class: 'section' },
-      h('h3', {}, 'Quellen & Notizen'),
-      h('div', { class: 'notes' }, p.notes),
     ));
   }
 
-  const relSection = h('div', { class: 'section' },
-    h('h3', {}, 'Verwandtschaft'),
-    h('div', { class: 'relations-group' }, [
-      ...relationBlock('Eltern', parents.map(x => ({ p: x }))),
-      ...relationBlock('Ehepartner', spouses.map(s => ({ p: s.p, role: fmtMarriage(s) }))),
-      ...relationBlock('Geschwister', siblings.map(x => ({ p: x }))),
-      ...relationBlock('Kinder', children.map(x => ({ p: x }))),
-    ].flat()),
+  // ---- Biography card (collapsible) ---------------------------------
+  const bioSection = h('div', { class: 'section dossier-section', id: 'bio-section' },
+    h('h3', {}, 'Biografie'),
+    h('div', { id: 'bio-body', class: 'bio-body' }, h('div', { class: 'meta' }, 'Lade…')),
   );
-  el.appendChild(relSection);
+  el.appendChild(bioSection);
+  loadBiography(p.id);
 
-  // Documents section
-  const docSection = h('div', { class: 'section' },
-    h('h3', {}, 'Dokumente'),
+  // ---- Historischer Kontext (auto, no backend) ----------------------
+  const histEvents = historicalContextFor(p);
+  if (histEvents.length) {
+    const histSection = h('div', { class: 'section dossier-section' },
+      h('h3', {}, 'Historischer Kontext'),
+      h('ul', { class: 'ctx-list' },
+        ...histEvents.map(e => h('li', {}, [e.label, e.years && h('small', {}, e.years)].filter(Boolean))),
+      ),
+    );
+    el.appendChild(histSection);
+  }
+
+  // ---- Familie (round mini-cards) -----------------------------------
+  const famSection = h('div', { class: 'section dossier-section' },
+    h('h3', {}, 'Familie'),
+    h('div', { class: 'family-grid' },
+      familyGroup('Eltern', parents),
+      familyGroup('Ehepartner', spouses.map(s => s.p)),
+      familyGroup('Geschwister', siblings),
+      familyGroup('Kinder', children),
+    ),
+  );
+  el.appendChild(famSection);
+
+  // ---- Beruf & Karriere ---------------------------------------------
+  el.appendChild(subSection('jobs', 'Beruf & Karriere', p.id, renderJob));
+  // ---- Wohnorte -----------------------------------------------------
+  el.appendChild(subSection('residences', 'Wohnorte', p.id, renderResidence));
+  // ---- Militärdienst ------------------------------------------------
+  el.appendChild(subSection('military', 'Militärdienst', p.id, renderMilitary));
+  // ---- Anekdoten ----------------------------------------------------
+  el.appendChild(subSection('anecdotes', 'Anekdoten & Erinnerungen', p.id, renderAnecdote));
+  // ---- Gesundheit (editor only) -------------------------------------
+  if (state.role === 'editor') {
+    el.appendChild(subSection('health-events', 'Gesundheit & Erbliches', p.id, renderHealth, { confidential: true, collapsed: true }));
+  }
+
+  // ---- Dokumente ----------------------------------------------------
+  const docSection = h('div', { class: 'section dossier-section' },
+    h('h3', {}, 'Dokumente & Urkunden'),
     h('div', { class: 'image-grid', id: 'image-grid-' + p.id }, h('div', { class: 'meta' }, 'Lade…')),
   );
   el.appendChild(docSection);
   loadImagesInto(p.id, docSection.querySelector('.image-grid'));
 
-  // Latest AI run
-  const aiSection = h('div', { class: 'section', id: 'ai-section' },
-    h('h3', {}, 'KI-Recherche'),
+  // ---- Externe Quellen (Research) -----------------------------------
+  const resSection = h('div', { class: 'section dossier-section', id: 'ext-sources-section' },
+    h('h3', {}, 'Externe Quellen'),
+    h('div', { id: 'ext-sources-body' }, h('div', { class: 'meta' }, 'Lade…')),
+  );
+  el.appendChild(resSection);
+  loadResearchHits(p.id);
+
+  // ---- KI-Recherche (bestehend) -------------------------------------
+  const aiSection = h('div', { class: 'section dossier-section', id: 'ai-section' },
+    h('h3', {}, 'KI-Dossier (Verwandtschaft)'),
     h('div', { id: 'ai-latest' }, h('div', { class: 'meta' }, 'Lade…')),
   );
   el.appendChild(aiSection);
   loadLatestResearch(p.id);
 
-  // Actions
+  // ---- Quellen & Notizen --------------------------------------------
+  if (p.notes) {
+    el.appendChild(h('div', { class: 'section dossier-section' },
+      h('h3', {}, 'Quellen & Notizen'),
+      h('div', { class: 'notes' }, p.notes),
+    ));
+  }
+
+  // ---- Actions ------------------------------------------------------
   if (state.role === 'editor') {
     const actions = h('div', { class: 'actions' });
     actions.appendChild(btnOutline('Bearbeiten', () => openPersonDialog(p)));
@@ -1103,6 +1159,342 @@ function renderDetail() {
     }, 'btn-danger'));
     el.appendChild(actions);
   }
+
+  // Auto-trigger biography if enough facts and none yet.
+  maybeAutoGenerateBio(p);
+}
+
+function yearRange(p) {
+  const b = year(p.birth_date), d = year(p.death_date);
+  if (b && d) return `${b} – ${d}`;
+  if (b) return `${b} – lebt`;
+  if (d) return `† ${d}`;
+  return '';
+}
+
+function familyGroup(title, people) {
+  if (!people.length) return h('div');
+  return h('div', { class: 'family-col' },
+    h('div', { class: 'family-title' }, title),
+    h('div', { class: 'family-cards' },
+      ...people.map(x => {
+        const card = h('button', { class: 'family-card', 'data-id': x.id },
+          h('div', { class: 'family-avatar' },
+            x.portrait_image_id
+              ? h('img', { src: '/api/images/' + x.portrait_image_id, alt: nameOf(x) })
+              : h('span', {}, initialsOf(x)),
+          ),
+          h('div', { class: 'family-meta' },
+            h('div', { class: 'family-name' }, primaryNameOf(x)),
+            h('div', { class: 'family-dates' }, fmtLifeShort(x) || '—'),
+          ),
+        );
+        card.onclick = () => select(x.id);
+        return card;
+      }),
+    ),
+  );
+}
+
+/* --- historical context --------------------------------------------- */
+const HISTORICAL = [
+  { label: 'Weimarer Republik', from: 1918, to: 1933 },
+  { label: 'Erster Weltkrieg',  from: 1914, to: 1918 },
+  { label: 'Weltwirtschaftskrise', from: 1929, to: 1933 },
+  { label: 'Nationalsozialismus', from: 1933, to: 1945 },
+  { label: 'Zweiter Weltkrieg', from: 1939, to: 1945 },
+  { label: 'Nachkriegszeit / Besatzung', from: 1945, to: 1949 },
+  { label: 'DDR gegründet', from: 1949, to: 1990 },
+  { label: 'Wirtschaftswunder BRD', from: 1950, to: 1973 },
+  { label: 'Mauerbau Berlin', from: 1961, to: 1961 },
+  { label: 'Mondlandung', from: 1969, to: 1969 },
+  { label: 'Mauerfall', from: 1989, to: 1989 },
+  { label: 'Deutsche Wiedervereinigung', from: 1990, to: 1990 },
+  { label: 'Einführung des Euro', from: 2002, to: 2002 },
+];
+function historicalContextFor(p) {
+  const b = parseInt(year(p.birth_date), 10);
+  const d = parseInt(year(p.death_date), 10) || new Date().getFullYear();
+  if (isNaN(b)) return [];
+  return HISTORICAL
+    .filter(ev => ev.from <= d && ev.to >= b)
+    .slice(0, 8)
+    .map(ev => ({ label: ev.label, years: ev.from === ev.to ? `${ev.from}` : `${ev.from}–${ev.to}` }));
+}
+
+/* --- generic sub-resource section ---------------------------------- */
+function subSection(kind, title, personId, renderOne, opts = {}) {
+  const box = h('div', { class: 'section dossier-section', id: `sub-${kind}-${personId}` });
+  const head = h('div', { class: 'section-head' },
+    h('h3', {}, title),
+    opts.confidential ? h('span', { class: 'badge badge-conf' }, 'Vertraulich') : null,
+    state.role === 'editor' ? btnOutline('+ Eintrag', () => openSubDialog(kind, personId), 'sub-add') : null,
+  );
+  box.appendChild(head);
+  const body = h('div', { class: 'sub-body', id: `body-${kind}-${personId}` }, h('div', { class: 'meta' }, 'Lade…'));
+  if (opts.collapsed) { box.classList.add('is-collapsed'); head.onclick = () => box.classList.toggle('is-collapsed'); head.style.cursor = 'pointer'; }
+  box.appendChild(body);
+  loadSub(kind, personId, body, renderOne);
+  return box;
+}
+
+async function loadSub(kind, personId, body, renderOne) {
+  try {
+    const items = await api.listSub(personId, kind);
+    body.innerHTML = '';
+    if (!items.length) {
+      body.appendChild(h('div', { class: 'meta' }, 'Keine Einträge.'));
+      return;
+    }
+    for (const it of items) {
+      const row = renderOne(it);
+      if (state.role === 'editor') {
+        const rm = h('button', { class: 'sub-rm', title: 'Entfernen' }, '×');
+        rm.onclick = async () => {
+          if (!confirm('Diesen Eintrag löschen?')) return;
+          await api.deleteSub(personId, kind, it.id);
+          await loadSub(kind, personId, body, renderOne);
+        };
+        row.appendChild(rm);
+      }
+      body.appendChild(row);
+    }
+  } catch (e) {
+    body.innerHTML = '';
+    body.appendChild(h('div', { class: 'meta' }, 'Fehler: ' + e.message));
+  }
+}
+
+function renderJob(j) {
+  return h('div', { class: 'sub-row' },
+    h('div', { class: 'sub-title' }, j.title || 'Beruf'),
+    h('div', { class: 'sub-sub' }, [j.employer, j.place].filter(Boolean).join(' · ')),
+    h('div', { class: 'sub-range' }, [j.start_date, j.end_date].filter(Boolean).join(' – ')),
+    j.notes ? h('div', { class: 'sub-note' }, j.notes) : null,
+  );
+}
+function renderResidence(r) {
+  return h('div', { class: 'sub-row' },
+    h('div', { class: 'sub-title' }, r.place),
+    h('div', { class: 'sub-sub' }, r.kind || ''),
+    h('div', { class: 'sub-range' }, [r.start_date, r.end_date].filter(Boolean).join(' – ')),
+    r.notes ? h('div', { class: 'sub-note' }, r.notes) : null,
+  );
+}
+function renderMilitary(m) {
+  return h('div', { class: 'sub-row' },
+    h('div', { class: 'sub-title' }, [m.branch, m.rank].filter(Boolean).join(' · ') || 'Militär'),
+    h('div', { class: 'sub-sub' }, [m.unit, m.campaigns].filter(Boolean).join(' · ')),
+    h('div', { class: 'sub-range' }, [m.start_date, m.end_date].filter(Boolean).join(' – ')),
+    m.notes ? h('div', { class: 'sub-note' }, m.notes) : null,
+  );
+}
+function renderAnecdote(a) {
+  return h('div', { class: 'sub-row anecdote' },
+    h('div', { class: 'sub-title' }, a.title || 'Anekdote'),
+    h('div', { class: 'sub-text' }, a.text),
+    h('div', { class: 'sub-source' }, [a.year, a.source].filter(Boolean).join(' · ')),
+  );
+}
+function renderHealth(e) {
+  return h('div', { class: 'sub-row' },
+    h('div', { class: 'sub-title' }, e.condition),
+    h('div', { class: 'sub-sub' }, [e.date, e.hereditary ? 'erblich' : null].filter(Boolean).join(' · ')),
+    e.notes ? h('div', { class: 'sub-note' }, e.notes) : null,
+  );
+}
+
+const SUB_FIELDS = {
+  jobs: [
+    { name: 'title',      label: 'Position',   type: 'text' },
+    { name: 'employer',   label: 'Arbeitgeber', type: 'text' },
+    { name: 'place',      label: 'Ort',         type: 'text' },
+    { name: 'start_date', label: 'von',         type: 'text', placeholder: 'JJJJ oder JJJJ-MM-TT' },
+    { name: 'end_date',   label: 'bis',         type: 'text' },
+    { name: 'notes',      label: 'Notiz',       type: 'textarea' },
+  ],
+  residences: [
+    { name: 'place',      label: 'Ort',    type: 'text' },
+    { name: 'kind',       label: 'Art',    type: 'text', placeholder: 'z. B. Geburtsort, Elternhaus, Studienort' },
+    { name: 'start_date', label: 'von',    type: 'text' },
+    { name: 'end_date',   label: 'bis',    type: 'text' },
+    { name: 'notes',      label: 'Notiz',  type: 'textarea' },
+  ],
+  military: [
+    { name: 'branch',     label: 'Teilstreitkraft', type: 'text', placeholder: 'Heer, Marine, Luftwaffe' },
+    { name: 'rank',       label: 'Dienstgrad', type: 'text' },
+    { name: 'unit',       label: 'Einheit',    type: 'text' },
+    { name: 'campaigns',  label: 'Feldzug / Einsatz', type: 'text' },
+    { name: 'start_date', label: 'von',        type: 'text' },
+    { name: 'end_date',   label: 'bis',        type: 'text' },
+    { name: 'notes',      label: 'Notiz',      type: 'textarea' },
+  ],
+  anecdotes: [
+    { name: 'title',  label: 'Titel',  type: 'text' },
+    { name: 'text',   label: 'Text',   type: 'textarea', required: true },
+    { name: 'source', label: 'Quelle', type: 'text' },
+    { name: 'year',   label: 'Jahr',   type: 'text' },
+  ],
+  'health-events': [
+    { name: 'condition',  label: 'Diagnose / Zustand', type: 'text', required: true },
+    { name: 'date',       label: 'Datum', type: 'text' },
+    { name: 'hereditary', label: 'erblich?', type: 'checkbox' },
+    { name: 'notes',      label: 'Notiz', type: 'textarea' },
+  ],
+};
+
+function openSubDialog(kind, personId) {
+  const dlg = document.getElementById('sub-dialog') || createSubDialog();
+  const form = dlg.querySelector('form');
+  form.innerHTML = '';
+  const title = { jobs: 'Beruf', residences: 'Wohnort', military: 'Militärdienst', anecdotes: 'Anekdote', 'health-events': 'Gesundheitseintrag' }[kind];
+  form.appendChild(h('h2', { class: 'dlg-title' }, 'Neuer Eintrag · ' + title));
+  const fields = SUB_FIELDS[kind] || [];
+  for (const f of fields) {
+    const wrap = h('label', { class: 'field' });
+    wrap.appendChild(h('span', {}, f.label + (f.required ? ' *' : '')));
+    let input;
+    if (f.type === 'textarea') input = h('textarea', { name: f.name, rows: '3', maxlength: '2000' });
+    else if (f.type === 'checkbox') input = h('input', { type: 'checkbox', name: f.name, value: '1' });
+    else input = h('input', { type: 'text', name: f.name, maxlength: '400' });
+    if (f.placeholder) input.setAttribute('placeholder', f.placeholder);
+    if (f.required) input.setAttribute('required', '');
+    wrap.appendChild(input);
+    form.appendChild(wrap);
+  }
+  const menu = h('menu', { class: 'dlg-actions' },
+    (() => { const b = h('button', { type: 'button', class: 'btn-ghost' }, 'Abbrechen'); b.onclick = () => dlg.close(); return b; })(),
+    h('button', { type: 'submit', class: 'btn-primary' }, 'Speichern'),
+  );
+  form.appendChild(menu);
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const data = Object.fromEntries(new FormData(form));
+    for (const f of fields) if (f.type === 'checkbox') data[f.name] = form.querySelector(`[name="${f.name}"]`).checked ? '1' : '';
+    try {
+      await api.createSub(personId, kind, data);
+      dlg.close();
+      renderDetail();
+    } catch (e) { alert('Fehler: ' + e.message); }
+  };
+  dlg.showModal();
+}
+function createSubDialog() {
+  const dlg = h('dialog', { id: 'sub-dialog', class: 'dlg' });
+  dlg.appendChild(h('form', { method: 'dialog', id: 'sub-form' }));
+  document.body.appendChild(dlg);
+  return dlg;
+}
+
+/* --- biography ------------------------------------------------------ */
+async function loadBiography(personId) {
+  const body = document.getElementById('bio-body');
+  if (!body) return;
+  try {
+    const bio = await api.bio(personId);
+    body.innerHTML = '';
+    if (!bio) {
+      body.appendChild(h('div', { class: 'meta' }, 'Noch keine Biografie erzeugt.'));
+      if (state.role === 'editor') {
+        const b = btnOutline('✎ Biografie schreiben', () => makeBio(personId));
+        body.appendChild(h('div', { style: 'margin-top:8px' }, b));
+      }
+      return;
+    }
+    body.appendChild(h('div', { class: 'bio-narrative' }, bio.narrative));
+    body.appendChild(h('div', { class: 'bio-foot' },
+      h('div', { class: 'meta' }, 'Erzeugt ' + fmtDate(bio.generated_at) + (bio.model ? ' · ' + bio.model : '')),
+      state.role === 'editor' ? btnOutline('↻ Neu generieren', () => makeBio(personId), 'small') : null,
+    ));
+  } catch (e) {
+    body.innerHTML = '';
+    body.appendChild(h('div', { class: 'meta' }, 'Fehler: ' + e.message));
+  }
+}
+async function makeBio(personId) {
+  const body = document.getElementById('bio-body');
+  if (!body) return;
+  body.innerHTML = '';
+  body.appendChild(h('div', { class: 'meta' }, 'Claude schreibt die Biografie…'));
+  try {
+    await api.makeBio(personId);
+    await loadBiography(personId);
+  } catch (e) {
+    body.innerHTML = '';
+    body.appendChild(h('div', { class: 'meta' }, 'Fehler: ' + e.message));
+  }
+}
+
+function maybeAutoGenerateBio(p) {
+  if (state.role !== 'editor') return;
+  const { parents, children, spouses } = relationsOf(p.id);
+  const factCount =
+    (p.given_name || p.surname ? 1 : 0) +
+    (p.birth_date ? 1 : 0) +
+    (p.death_date ? 1 : 0) +
+    (parents.length ? 1 : 0) +
+    (spouses.length ? 1 : 0) +
+    (children.length ? 1 : 0);
+  if (factCount < 3) return;
+  // Fire-and-forget check: if no bio yet, start one
+  api.bio(p.id).then(bio => {
+    if (!bio && state.selected === p.id) makeBio(p.id);
+  }).catch(() => { /* ignore */ });
+}
+
+/* --- external research hits ---------------------------------------- */
+async function loadResearchHits(personId) {
+  const body = document.getElementById('ext-sources-body');
+  if (!body) return;
+  try {
+    const hits = await api.listHits(personId);
+    body.innerHTML = '';
+    if (state.role === 'editor') {
+      body.appendChild(h('div', { class: 'ext-head' },
+        btnOutline('🔎 Alle Quellen durchsuchen', () => scrapeHits(personId)),
+      ));
+    }
+    if (!hits.length) {
+      body.appendChild(h('div', { class: 'meta' }, 'Noch keine externen Treffer. Wikidata-Suche gestartet werden kann hier.'));
+      return;
+    }
+    for (const hit of hits) {
+      body.appendChild(renderHit(hit, personId));
+    }
+  } catch (e) {
+    body.innerHTML = '';
+    body.appendChild(h('div', { class: 'meta' }, 'Fehler: ' + e.message));
+  }
+}
+async function scrapeHits(personId) {
+  const body = document.getElementById('ext-sources-body');
+  if (!body) return;
+  body.innerHTML = '';
+  body.appendChild(h('div', { class: 'meta' }, 'Externe Quellen werden abgefragt…'));
+  try {
+    await api.scrape(personId);
+    await loadResearchHits(personId);
+  } catch (e) {
+    body.innerHTML = '';
+    body.appendChild(h('div', { class: 'meta' }, 'Fehler: ' + e.message));
+  }
+}
+function renderHit(hit, personId) {
+  const row = h('div', { class: 'hit', 'data-status': hit.status || 'pending' },
+    h('div', { class: 'hit-src' }, (hit.source || '').toUpperCase()),
+    h('div', { class: 'hit-main' },
+      hit.url
+        ? h('a', { href: hit.url, target: '_blank', rel: 'noopener', class: 'hit-title' }, hit.title || hit.url)
+        : h('div', { class: 'hit-title' }, hit.title || '—'),
+      h('div', { class: 'hit-snippet' }, hit.snippet || ''),
+      h('div', { class: 'hit-conf' }, 'Konfidenz ' + Math.round((hit.confidence || 0) * 100) + '%'),
+    ),
+    state.role === 'editor' && (hit.status === 'pending' || !hit.status) ? h('div', { class: 'hit-actions' },
+      btnOutline('Notiz', async () => { await api.applyHit(hit.id, 'add_source_note'); await loadResearchHits(personId); await reload(); }, 'small'),
+      btnOutline('Verwerfen', async () => { await api.applyHit(hit.id, 'dismiss'); await loadResearchHits(personId); }, 'small btn-danger'),
+    ) : h('div'),
+  );
+  return row;
 }
 
 function fmtMarriage(s) {

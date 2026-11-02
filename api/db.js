@@ -90,6 +90,74 @@ db.exec(`
     action TEXT NOT NULL,
     detail TEXT
   );
+
+  CREATE TABLE IF NOT EXISTS jobs (
+    id         TEXT PRIMARY KEY,
+    person_id  TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    title      TEXT, employer TEXT,
+    start_date TEXT, end_date TEXT,
+    place      TEXT, notes TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_jobs_person ON jobs(person_id);
+
+  CREATE TABLE IF NOT EXISTS residences (
+    id         TEXT PRIMARY KEY,
+    person_id  TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    place      TEXT NOT NULL,
+    start_date TEXT, end_date TEXT,
+    kind       TEXT, notes TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_res_person ON residences(person_id);
+
+  CREATE TABLE IF NOT EXISTS health_events (
+    id         TEXT PRIMARY KEY,
+    person_id  TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    condition  TEXT NOT NULL,
+    date       TEXT,
+    hereditary INTEGER DEFAULT 0,
+    notes      TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_health_person ON health_events(person_id);
+
+  CREATE TABLE IF NOT EXISTS military_service (
+    id         TEXT PRIMARY KEY,
+    person_id  TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    branch     TEXT, rank TEXT, unit TEXT,
+    start_date TEXT, end_date TEXT,
+    campaigns  TEXT, notes TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_mil_person ON military_service(person_id);
+
+  CREATE TABLE IF NOT EXISTS anecdotes (
+    id         TEXT PRIMARY KEY,
+    person_id  TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    title      TEXT, text TEXT NOT NULL, source TEXT, year TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_anec_person ON anecdotes(person_id);
+
+  CREATE TABLE IF NOT EXISTS biographies (
+    person_id    TEXT PRIMARY KEY REFERENCES persons(id) ON DELETE CASCADE,
+    narrative    TEXT NOT NULL,
+    model        TEXT,
+    generated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS research_hits (
+    id         TEXT PRIMARY KEY,
+    person_id  TEXT REFERENCES persons(id) ON DELETE CASCADE,
+    source     TEXT NOT NULL,
+    url        TEXT, title TEXT, snippet TEXT,
+    confidence REAL,
+    payload    TEXT,
+    status     TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_hits_person ON research_hits(person_id, status);
 `);
 
 // Idempotente Migration: Spalte in bestehender Tabelle anlegen falls fehlt.

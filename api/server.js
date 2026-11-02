@@ -9,6 +9,8 @@ import {
   logAudit,
 } from './db.js';
 import { createAnthropicClient, runResearch } from './research.js';
+import { generateBiography } from './biography.js';
+import { dispatchResearch, listSources } from './research_dispatch.js';
 import { createRateLimiter } from './ratelimit.js';
 import { gedcomToPayload } from './gedcom.js';
 
@@ -507,6 +509,190 @@ app.delete('/api/person-images', requireEditor, (req, res) => {
     .run(person_id, image_id);
   res.json({ deleted: info.changes });
 });
+
+/* sub-resources (jobs, residences, military, anecdotes, health_events) ---- */
+// Generic CRUD mounted at /api/persons/:id/<kind>.
+// Health events are editor-only for viewer too (privacy).
+
+const SUB_RESOURCES = {
+  jobs:              { table: 'jobs',             cols: ['title','employer','start_date','end_date','place','notes'] },
+  residences:        { table: 'residences',       cols: ['place','start_date','end_date','kind','notes'] },
+  military:          { table: 'military_service', cols: ['branch','rank','unit','start_date','end_date','campaigns','notes'] },
+  anecdotes:         { table: 'anecdotes',        cols: ['title','text','source','year'] },
+  'health-events':   { table: 'health_events',    cols: ['condition','date','hereditary','notes'], editorOnlyRead: true },
+};
+
+function sanitizeSub(cfg, body) {
+  const out = {};
+  for (const c of cfg.cols) {
+    const v = body?.[c];
+    if (v == null) continue;
+    if (c === 'hereditary') { out[c] = v ? 1 : 0; continue; }
+    if (typeof v !== 'string') throw httpErr(400, `${c} must be string`);
+    if (v.length > 2000) throw httpErr(400, `${c} too long`);
+    out[c] = v.trim() || null;
+  }
+  return out;
+}
+
+for (const [kind, cfg] of Object.entries(SUB_RESOURCES)) {
+  const readGuard = cfg.editorOnlyRead ? requireEditor : requireViewer;
+  app.get(`/api/persons/:id/${kind}`, readGuard, (req, res) => {
+    const rows = db.prepare(`SELECT * FROM ${cfg.table} WHERE person_id=? ORDER BY start_date, created_at`).all(req.params.id);
+    res.json(rows);
+  });
+  app.post(`/api/persons/:id/${kind}`, requireEditor, (req, res) => {
+    const person = db.prepare('SELECT id FROM persons WHERE id=?').get(req.params.id);
+    if (!person) return res.status(404).json({ error: 'person not found' });
+    const data = sanitizeSub(cfg, req.body || {});
+    if (!Object.keys(data).length) return res.status(400).json({ error: 'no fields' });
+    const id = newId();
+    const now = nowIso();
+    const colList = ['id', 'person_id', ...cfg.cols, 'created_at'];
+    const placeholders = colList.map(c => `@${c}`).join(', ');
+    db.prepare(`INSERT INTO ${cfg.table} (${colList.join(', ')}) VALUES (${placeholders})`)
+      .run({ id, person_id: req.params.id, created_at: now, ...Object.fromEntries(cfg.cols.map(c => [c, null])), ...data });
+    logAudit(req.auth.role, `${kind}.create`, id);
+    res.status(201).json(db.prepare(`SELECT * FROM ${cfg.table} WHERE id=?`).get(id));
+  });
+  app.patch(`/api/persons/:id/${kind}/:sid`, requireEditor, (req, res) => {
+    const row = db.prepare(`SELECT id FROM ${cfg.table} WHERE id=? AND person_id=?`).get(req.params.sid, req.params.id);
+    if (!row) return res.status(404).json({ error: 'not found' });
+    const data = sanitizeSub(cfg, req.body || {});
+    if (!Object.keys(data).length) return res.status(400).json({ error: 'no fields' });
+    const set = Object.keys(data).map(k => `${k}=@${k}`).join(', ');
+    db.prepare(`UPDATE ${cfg.table} SET ${set} WHERE id=@id`).run({ ...data, id: req.params.sid });
+    logAudit(req.auth.role, `${kind}.update`, req.params.sid);
+    res.json(db.prepare(`SELECT * FROM ${cfg.table} WHERE id=?`).get(req.params.sid));
+  });
+  app.delete(`/api/persons/:id/${kind}/:sid`, requireEditor, (req, res) => {
+    const info = db.prepare(`DELETE FROM ${cfg.table} WHERE id=? AND person_id=?`).run(req.params.sid, req.params.id);
+    logAudit(req.auth.role, `${kind}.delete`, req.params.sid);
+    res.json({ deleted: info.changes });
+  });
+}
+
+/* biography ------------------------------------------------------------- */
+
+function gatherBioContext(personId) {
+  const person = db.prepare('SELECT * FROM persons WHERE id=?').get(personId);
+  if (!person) return null;
+  const sel = db.prepare('SELECT * FROM persons WHERE id=?');
+  const parentRows = db.prepare(`SELECT from_id FROM edges WHERE to_id=? AND type='parent'`).all(personId);
+  const parents = parentRows.map(r => sel.get(r.from_id)).filter(Boolean);
+  const childRows = db.prepare(`SELECT to_id FROM edges WHERE from_id=? AND type='parent'`).all(personId);
+  const children = childRows.map(r => sel.get(r.to_id)).filter(Boolean);
+  const spouseRows = db.prepare(`SELECT from_id, to_id FROM edges WHERE type='spouse' AND (from_id=? OR to_id=?)`).all(personId, personId);
+  const spouses = spouseRows.map(r => sel.get(r.from_id === personId ? r.to_id : r.from_id)).filter(Boolean);
+  const siblings = [];
+  const seen = new Set();
+  for (const p of parents) {
+    for (const r of db.prepare(`SELECT to_id FROM edges WHERE from_id=? AND type='parent' AND to_id != ?`).all(p.id, personId)) {
+      if (seen.has(r.to_id)) continue;
+      seen.add(r.to_id);
+      const s = sel.get(r.to_id);
+      if (s) siblings.push(s);
+    }
+  }
+  const jobs       = db.prepare('SELECT * FROM jobs WHERE person_id=? ORDER BY start_date').all(personId);
+  const residences = db.prepare('SELECT * FROM residences WHERE person_id=? ORDER BY start_date').all(personId);
+  const anecdotes  = db.prepare('SELECT * FROM anecdotes WHERE person_id=? ORDER BY year').all(personId);
+  const military   = db.prepare('SELECT * FROM military_service WHERE person_id=? ORDER BY start_date').all(personId);
+  const health     = db.prepare('SELECT * FROM health_events WHERE person_id=? ORDER BY date').all(personId);
+  const docCaptions = db.prepare(`
+    SELECT i.caption, pi.role FROM images i JOIN person_images pi ON pi.image_id=i.id
+    WHERE pi.person_id=? AND i.caption IS NOT NULL
+  `).all(personId).map(r => [r.role, r.caption].filter(Boolean).join(': '));
+  return { person, parents, spouses, children, siblings, jobs, residences, anecdotes, military, health, docCaptions };
+}
+
+app.get('/api/persons/:id/biography', requireViewer, (req, res) => {
+  const row = db.prepare('SELECT * FROM biographies WHERE person_id=?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'no biography' });
+  res.json(row);
+});
+
+app.post('/api/persons/:id/biography', requireEditor, aiLimiter, async (req, res) => {
+  if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY nicht gesetzt' });
+  const ctx = gatherBioContext(req.params.id);
+  if (!ctx) return res.status(404).json({ error: 'person not found' });
+  try {
+    const result = await generateBiography(anthropic, ctx);
+    const now = nowIso();
+    db.prepare(`INSERT INTO biographies (person_id, narrative, model, generated_at)
+      VALUES (?,?,?,?)
+      ON CONFLICT(person_id) DO UPDATE SET narrative=excluded.narrative, model=excluded.model, generated_at=excluded.generated_at`)
+      .run(req.params.id, result.narrative, result.model, now);
+    logAudit(req.auth.role, 'bio.generate', req.params.id);
+    res.json({ person_id: req.params.id, narrative: result.narrative, model: result.model, generated_at: now, usage: result.usage });
+  } catch (err) {
+    logAudit(req.auth.role, 'bio.fail', req.params.id);
+    res.status(502).json({ error: err?.message || 'biography generation failed' });
+  }
+});
+
+/* research hits + sources ---------------------------------------------- */
+
+app.get('/api/research/sources', requireViewer, (_req, res) => res.json(listSources()));
+
+app.post('/api/persons/:id/research/scrape', requireEditor, aiLimiter, async (req, res) => {
+  const person = db.prepare('SELECT * FROM persons WHERE id=?').get(req.params.id);
+  if (!person) return res.status(404).json({ error: 'person not found' });
+  try {
+    const hits = await dispatchResearch(person);
+    const now = nowIso();
+    const insert = db.prepare(`INSERT INTO research_hits
+      (id, person_id, source, url, title, snippet, confidence, payload, status, created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`);
+    const inserted = [];
+    const tx = db.transaction(() => {
+      for (const h of hits) {
+        const id = newId();
+        insert.run(id, req.params.id, h.source, h.url || null, h.title || null,
+          h.snippet || null, h.confidence || 0, JSON.stringify(h.payload || {}), 'pending', now);
+        inserted.push({ id, ...h, status: 'pending', created_at: now });
+      }
+    });
+    tx();
+    logAudit(req.auth.role, 'research.scrape', `${req.params.id} ${inserted.length} hits`);
+    res.json({ person_id: req.params.id, hits: inserted });
+  } catch (err) {
+    res.status(502).json({ error: err?.message || 'scrape failed' });
+  }
+});
+
+app.get('/api/persons/:id/research/hits', requireViewer, (req, res) => {
+  const rows = db.prepare(`SELECT * FROM research_hits WHERE person_id=? ORDER BY created_at DESC`)
+    .all(req.params.id);
+  res.json(rows.map(r => ({ ...r, payload: safeJson(r.payload) })));
+});
+
+app.post('/api/research/hits/:id/apply', requireEditor, (req, res) => {
+  const hit = db.prepare('SELECT * FROM research_hits WHERE id=?').get(req.params.id);
+  if (!hit) return res.status(404).json({ error: 'hit not found' });
+  const action = String(req.body?.action || '').trim();
+  if (!['accept','dismiss','add_source_note'].includes(action)) {
+    return res.status(400).json({ error: 'invalid action' });
+  }
+  let newStatus = action;
+  if (action === 'add_source_note' && hit.person_id) {
+    // append a short line to the person's notes
+    const p = db.prepare('SELECT notes FROM persons WHERE id=?').get(hit.person_id);
+    if (p) {
+      const line = `\n[Quelle · ${hit.source}] ${hit.title || ''} ${hit.url || ''}`.trim();
+      const newNotes = (p.notes ? p.notes + '\n' : '') + line;
+      db.prepare('UPDATE persons SET notes=?, updated_at=? WHERE id=?')
+        .run(newNotes.slice(0, 2000), nowIso(), hit.person_id);
+    }
+    newStatus = 'applied';
+  }
+  if (action === 'accept') newStatus = 'accepted';
+  db.prepare('UPDATE research_hits SET status=? WHERE id=?').run(newStatus, req.params.id);
+  logAudit(req.auth.role, `research.${action}`, req.params.id);
+  res.json({ id: req.params.id, status: newStatus });
+});
+
+function safeJson(s) { try { return JSON.parse(s || 'null'); } catch { return null; } }
 
 /* health ---------------------------------------------------------------- */
 
