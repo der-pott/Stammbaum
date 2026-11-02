@@ -218,6 +218,23 @@ if (!edgeCols.has('status')) {
   db.exec("ALTER TABLE edges ADD COLUMN status TEXT");
 }
 
+// residences — strukturierte Adress-Felder. `place` bleibt als Legacy-Freitext.
+const resCols = new Set(db.prepare('PRAGMA table_info(residences)').all().map(c => c.name));
+const resMigrations = [
+  ['street',                  'TEXT'],
+  ['city',                    'TEXT'],
+  ['district',                'TEXT'],
+  ['postal_code',             'TEXT'],
+  ['postal_code_historical',  'TEXT'],
+  ['region',                  'TEXT'],
+  ['country',                 "TEXT DEFAULT 'Deutschland'"],
+];
+for (const [col, type] of resMigrations) {
+  if (!resCols.has(col)) {
+    db.exec(`ALTER TABLE residences ADD COLUMN ${col} ${type}`);
+  }
+}
+
 export function nowIso() { return new Date().toISOString(); }
 export function newId()  { return randomUUID(); }
 

@@ -1813,9 +1813,24 @@ function renderEducation(e) {
   );
 }
 function renderResidence(r) {
+  // Hauptzeile aus strukturierten Feldern, Fallback auf freitext `place`.
+  let main;
+  if (r.street || r.city) {
+    const left = r.street || '';
+    const right = [r.postal_code, r.city].filter(Boolean).join(' ');
+    const dist = r.district ? ` (${r.district})` : '';
+    main = [left, right].filter(Boolean).join(', ') + dist;
+  } else {
+    main = r.place || '';
+  }
+  const subParts = [];
+  if (r.kind) subParts.push(r.kind);
+  if (r.postal_code_historical) subParts.push(`historisch: ${r.postal_code_historical}`);
+  if (r.country && r.country !== 'Deutschland') subParts.push(`${r.region || ''}, ${r.country}`.replace(/^, /, ''));
+  else if (r.region && r.region !== r.city) subParts.push(r.region);
   return h('div', { class: 'sub-row' },
-    h('div', { class: 'sub-title' }, r.place),
-    h('div', { class: 'sub-sub' }, r.kind || ''),
+    h('div', { class: 'sub-title' }, main),
+    h('div', { class: 'sub-sub' }, subParts.filter(Boolean).join(' · ')),
     h('div', { class: 'sub-range' }, fmtRange(r.start_date, r.end_date)),
     r.notes ? h('div', { class: 'sub-note' }, r.notes) : null,
   );
@@ -1862,11 +1877,17 @@ const SUB_FIELDS = {
     { name: 'notes',      label: 'Notiz',       type: 'textarea' },
   ],
   residences: [
-    { name: 'place',      label: 'Ort',    type: 'text' },
-    { name: 'kind',       label: 'Art',    type: 'text', placeholder: 'z. B. Geburtsort, Elternhaus, Studienort' },
-    { name: 'start_date', label: 'von',    type: 'text' },
-    { name: 'end_date',   label: 'bis',    type: 'text' },
-    { name: 'notes',      label: 'Notiz',  type: 'textarea' },
+    { name: 'street',                 label: 'Straße + Hausnummer', type: 'text', placeholder: 'z. B. Woyrschstraße 26' },
+    { name: 'city',                   label: 'Stadt / Ort',         type: 'text', placeholder: 'z. B. Berlin, Werder (Havel), Wien' },
+    { name: 'district',               label: 'Stadtteil',           type: 'text', placeholder: 'z. B. Charlottenburg, Haselhorst' },
+    { name: 'postal_code',            label: 'PLZ (aktuell)',       type: 'text', placeholder: 'z. B. 10785' },
+    { name: 'postal_code_historical', label: 'PLZ (historisch)',    type: 'text', placeholder: 'z. B. W 35 (vor 1961)' },
+    { name: 'region',                 label: 'Bundesland / Region', type: 'text', placeholder: 'z. B. Brandenburg, Oberschlesien' },
+    { name: 'country',                label: 'Land',                type: 'text', placeholder: 'Deutschland', value: 'Deutschland' },
+    { name: 'kind',                   label: 'Art',                 type: 'text', placeholder: 'z. B. Geburtsort, Elternhaus, Studienort' },
+    { name: 'start_date',             label: 'von',                 type: 'text', placeholder: 'TT.MM.JJJJ' },
+    { name: 'end_date',               label: 'bis',                 type: 'text', placeholder: 'TT.MM.JJJJ' },
+    { name: 'notes',                  label: 'Notiz',               type: 'textarea' },
   ],
   military: [
     { name: 'branch',     label: 'Teilstreitkraft', type: 'text', placeholder: 'Heer, Marine, Luftwaffe' },
@@ -1912,6 +1933,8 @@ function openSubDialog(kind, personId, existing = null) {
       if (f.type === 'checkbox') input.checked = !!Number(existing[f.name]);
       else if (/date|_at$|^date$|since|until|start|end/i.test(f.name)) input.value = fmtDateDisplay(existing[f.name]);
       else input.value = existing[f.name];
+    } else if (!isEdit && f.value != null) {
+      input.value = f.value;
     }
     wrap.appendChild(input);
     form.appendChild(wrap);

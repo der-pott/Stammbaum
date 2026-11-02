@@ -620,7 +620,7 @@ app.delete('/api/person-images', requireEditor, (req, res) => {
 
 const SUB_RESOURCES = {
   jobs:              { table: 'jobs',             cols: ['title','employer','start_date','end_date','place','notes'], order: 'COALESCE(start_date, created_at)' },
-  residences:        { table: 'residences',       cols: ['place','start_date','end_date','kind','notes'], order: 'COALESCE(start_date, created_at)' },
+  residences:        { table: 'residences',       cols: ['place','street','city','district','postal_code','postal_code_historical','region','country','start_date','end_date','kind','notes'], order: 'COALESCE(start_date, created_at)' },
   military:          { table: 'military_service', cols: ['branch','rank','unit','start_date','end_date','campaigns','notes'], order: 'COALESCE(start_date, created_at)' },
   anecdotes:         { table: 'anecdotes',        cols: ['title','text','source','year'], order: 'COALESCE(year, created_at)' },
   'health-events':   { table: 'health_events',    cols: ['condition','date','hereditary','notes'], editorOnlyRead: true, order: 'COALESCE(date, created_at)' },
@@ -651,6 +651,11 @@ for (const [kind, cfg] of Object.entries(SUB_RESOURCES)) {
     if (!person) return res.status(404).json({ error: 'person not found' });
     const data = sanitizeSub(cfg, req.body || {});
     if (!Object.keys(data).length) return res.status(400).json({ error: 'no fields' });
+    // residences.place ist NOT NULL — auto-synthesize aus strukturierten Feldern falls fehlt
+    if (kind === 'residences' && !data.place) {
+      const parts = [data.street, data.postal_code, data.city, data.district && `(${data.district})`].filter(Boolean);
+      data.place = parts.length ? parts.join(' ') : (data.city || data.street || 'unbekannt');
+    }
     const id = newId();
     const now = nowIso();
     const colList = ['id', 'person_id', ...cfg.cols, 'created_at'];
