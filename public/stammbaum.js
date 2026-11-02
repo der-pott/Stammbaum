@@ -1366,7 +1366,7 @@ function computeLayout() {
   return {
     nodes, links, posById,
     slotByAnchor, slotPos, childSlotsOfAnchor, satelliteOf, spouseEdges,
-    forcedSatelliteOf, parentOf, primaryPartnerOf,
+    forcedSatelliteOf, parentOf, primaryPartnerOf, isAnchor,
     upstreamNodes, upstreamSpouseKeys, upstreamParentEdgeKeys,
     wantedUpstreamSpouseKeys,
     overlaps,
@@ -1635,13 +1635,15 @@ function renderTree() {
   // außen" even though data-wise it is a plain parent→child edge. Every
   // family line gets the same inline rendering regardless of which spouse's
   // slot the child was placed in.
-  for (const satId of satelliteOf.keys()) {
+  const satOfMap = state.layout.satelliteOf || new Map();
+  const anchorSet = state.layout.isAnchor || new Set();
+  for (const satId of satOfMap.keys()) {
     const pars = parentOfInLayout(satId);
     if (!pars.length) continue;
-    let parentAnchorId = pars.find(x => isAnchor.has(x));
+    let parentAnchorId = pars.find(x => anchorSet.has(x));
     if (!parentAnchorId) {
       for (const par of pars) {
-        if (satelliteOf.has(par)) { parentAnchorId = satelliteOf.get(par); break; }
+        if (satOfMap.has(par)) { parentAnchorId = satOfMap.get(par); break; }
       }
     }
     if (!parentAnchorId) continue;
