@@ -6,10 +6,15 @@ User droppt Bilder/Dokumente in `/Users/maximilianpott/Projects/Stammbaum/inbox/
 
 Workflow pro File in `inbox/` (ohne `README.md`, `.gitkeep`, `processed/`):
 1. Analyse: welche Person(en), welche Dokumenten-Art.
-2. Upload via `/api/images` + `/api/person-images` mit sinnvoller `role`.
-3. Strukturierte Fakten extrahieren (Adressen → `residences`, Berufe → `jobs`, Ausbildung → `education`, Militär → `military`, Lebensdaten → `PATCH persons`, usw. gemäß Regel „Dokumente ausschlachten").
-4. File verschieben nach `inbox/processed/YYYY-MM-DD/<originalname>` (nicht löschen, Backup).
-5. Pro File dem User berichten: welche Person(en), welche strukturierten Einträge dazugekommen sind.
+2. **Optimieren** vor Upload mit `scripts/optimize_image.sh <in> <out>` → Auto-Trim schwarzer/einheitlicher Ränder (Fuzz 25%), Max-Edge 2000px, JPEG q=85, EXIF-strip. Fallback: wenn Trim > 50% der Fläche abschneidet, Original ohne Trim nehmen.
+3. Upload des OPTIMIERTEN Files via `/api/images` + `/api/person-images` mit sinnvoller `role`.
+4. Strukturierte Fakten extrahieren (Adressen → `residences`, Berufe → `jobs`, Ausbildung → `education`, Militär → `military`, Lebensdaten → `PATCH persons`, usw. gemäß Regel „Dokumente ausschlachten").
+5. Original (nicht das optimierte) verschieben nach `inbox/processed/YYYY-MM-DD/<originalname>` (nicht löschen, Backup).
+6. Pro File dem User berichten: welche Person(en), welche strukturierten Einträge dazugekommen sind.
+
+### Retroaktive Optimierung aller DB-Bilder
+
+`scripts/optimize_vps_images.sh` sichert zuerst nach `/data/images.backup-YYYYMMDD/` im Container, läuft dann durch alle Dateien in `/data/images/`, zieht sie per `ssh vps "docker exec stammbaum-api cat …"`, optimiert lokal, pusht zurück und updated `images.mime` + `images.bytes` via `node -e` (sqlite3-CLI ist nicht im Container, better-sqlite3 schon).
 
 ## Bilder immer verknüpfen
 
