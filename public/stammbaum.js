@@ -734,11 +734,15 @@ function computeLayout() {
   }
 
   // Mutual primary couples (both prefer each other).
+  // Fair Anchor-Pick: KEIN Gender-Bias. Priorität: wer eigene Birth-Parents in
+  // DB hat (= Anker-Verankerung in dessen Linie), sonst älterer Partner, sonst
+  // lexikographische ID. Alle Sippen werden gleichberechtigt behandelt.
   const pickCoupleAnchor = (a, b) => {
     const pa = personById.get(a), pb = personById.get(b);
-    const gA = pa?.gender, gB = pb?.gender;
-    if (gA === 'm' && gB !== 'm') return a;
-    if (gB === 'm' && gA !== 'm') return b;
+    const parentsA = (parentOf.get(a) || []).length;
+    const parentsB = (parentOf.get(b) || []).length;
+    if (parentsA > 0 && parentsB === 0) return a;
+    if (parentsB > 0 && parentsA === 0) return b;
     const yA = year(pa?.birth_date), yB = year(pb?.birth_date);
     if (yA && yB && yA !== yB) return yA.localeCompare(yB) < 0 ? a : b;
     return a < b ? a : b;
