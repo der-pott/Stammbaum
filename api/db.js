@@ -214,7 +214,7 @@ db.exec(`
     applied_at   TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_reviews_person ON ai_reviews(person_id, created_at);
-  CREATE INDEX IF NOT EXISTS idx_reviews_ctxhash ON ai_reviews(person_id, context_hash);
+  -- idx_reviews_ctxhash wird nach der context_hash-Migration unten angelegt.
 
   -- Pro-Vorschlag-State: tracked welche suggestions aus welchem review schon
   -- angewandt oder als duplicate geskippt wurden. Dedup zwischen Reviews.
