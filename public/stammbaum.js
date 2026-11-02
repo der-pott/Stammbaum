@@ -250,6 +250,8 @@ function select(id) {
   state.selected = id;
   render();
   if (window.matchMedia('(max-width: 820px)').matches) {
+    // Make sure the two drawers don't overlap: close any open drawer first.
+    document.querySelector('.pane-list')?.classList.remove('open');
     openDrawer('detail');
   }
 }
@@ -645,6 +647,12 @@ function renderDetail() {
   el.innerHTML = '';
 
   const head = h('div', { class: 'detail-head' },
+    (() => {
+      const btn = h('button', { class: 'detail-close icon-btn', 'aria-label': 'Schließen' });
+      btn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6l-12 12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/></svg>';
+      btn.onclick = () => closeDrawers();
+      return btn;
+    })(),
     h('span', { class: 'detail-eyebrow' }, [
       year(p.birth_date) || '?',
       p.birth_place || p.death_place || null,

@@ -786,6 +786,21 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
   }
 }
 
+/* Detail close button: hidden on desktop, shown on mobile via media query below */
+.detail-close { display: none; }
+
+@media (max-width: 820px) {
+  .detail-close {
+    display: inline-grid;
+    position: absolute;
+    top: var(--sp-3); right: var(--sp-3);
+    z-index: 2;
+  }
+  .pane-detail > #detail { position: relative; }
+  .detail-head { padding-right: 44px; }
+  .pane-list .pane-head .search { padding-right: 10px; }
+}
+
 /* Phone portrait ------------------------------------------------------ */
 @media (max-width: 480px) {
   .masthead { padding: 0 var(--sp-2); }
