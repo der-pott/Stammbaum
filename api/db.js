@@ -158,6 +158,37 @@ db.exec(`
     created_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_hits_person ON research_hits(person_id, status);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_hits_dedup ON research_hits(person_id, source, url);
+
+  CREATE TABLE IF NOT EXISTS research_jobs (
+    id              TEXT PRIMARY KEY,
+    person_id       TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    status          TEXT NOT NULL CHECK (status IN ('queued','running','done','failed','cancelled')),
+    sources         TEXT NOT NULL,
+    source_statuses TEXT,
+    started_at      TEXT,
+    completed_at    TEXT,
+    created_at      TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_jobs_status ON research_jobs(status, created_at);
+
+  CREATE TABLE IF NOT EXISTS research_cache (
+    source     TEXT NOT NULL,
+    person_id  TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    payload    TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (source, person_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS scrape_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    url         TEXT,
+    status      INTEGER,
+    duration_ms INTEGER,
+    error       TEXT
+  );
 `);
 
 // Idempotente Migration: Spalte in bestehender Tabelle anlegen falls fehlt.
@@ -165,6 +196,13 @@ db.exec(`
 const existingCols = new Set(db.prepare('PRAGMA table_info(persons)').all().map(c => c.name));
 if (!existingCols.has('nicknames')) {
   db.exec('ALTER TABLE persons ADD COLUMN nicknames TEXT');
+}
+
+// edges.status — marriage lifecycle. Default null (treated as 'married' for backward compat).
+// Valid values: 'married', 'divorced', 'widowed', 'engaged', 'partner'.
+const edgeCols = new Set(db.prepare('PRAGMA table_info(edges)').all().map(c => c.name));
+if (!edgeCols.has('status')) {
+  db.exec("ALTER TABLE edges ADD COLUMN status TEXT");
 }
 
 export function nowIso() { return new Date().toISOString(); }

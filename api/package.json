@@ -1,6 +1,6 @@
 {
   "name": "stammbaum-api",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "main": "server.js",
@@ -10,6 +10,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.65.0",
     "better-sqlite3": "^11.5.0",
+    "cheerio": "^1.0.0",
     "cookie-parser": "^1.4.7",
     "express": "^4.21.2"
   }

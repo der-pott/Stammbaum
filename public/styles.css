@@ -314,7 +314,8 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
   stroke-dasharray: 3 3;
   opacity: 0.6;
 }
-.edge-heart {
+.edge-heart,
+.edge-glyph {
   font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", var(--font-text);
   font-size: 14px;
   fill: var(--seal);
@@ -322,6 +323,52 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
   user-select: none;
   pointer-events: none;
 }
+
+/* Marriage status variants ----------------------------------------- */
+.edge-spouse.status-divorced,
+.edge-spouse-remote.status-divorced {
+  stroke: var(--ink-faint);
+  opacity: 0.55;
+}
+.edge-spouse.status-widowed,
+.edge-spouse-remote.status-widowed {
+  stroke: var(--ink-faint);
+  opacity: 0.5;
+}
+.edge-spouse.status-engaged,
+.edge-spouse-remote.status-engaged {
+  stroke-dasharray: 3 3;
+}
+.edge-spouse.status-partner,
+.edge-spouse-remote.status-partner {
+  stroke-dasharray: 6 3;
+}
+
+.edge-glyph.widowed { fill: var(--ink-faint); }
+.edge-glyph.engaged { fill: var(--ink-soft); font-size: 11px; }
+.edge-glyph.partner { fill: var(--ink); font-size: 16px; font-weight: 500; }
+
+/* Two short slashes across the marriage line → divorce */
+.edge-slash {
+  stroke: var(--ink);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  opacity: 0.85;
+}
+
+/* Small status label below the connector */
+.edge-label {
+  font-family: var(--font-text);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  fill: var(--ink-faint);
+  dominant-baseline: hanging;
+  user-select: none;
+  pointer-events: none;
+}
+.edge-label.status-divorced { fill: var(--ink-soft); }
 
 .node { cursor: pointer; }
 
@@ -542,14 +589,22 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
   background: color-mix(in oklch, var(--paper-raised) 85%, var(--gold) 15%);
   border-color: color-mix(in oklch, var(--gold) 40%, var(--line));
 }
-.sub-rm {
-  position: absolute; top: 6px; right: 6px;
+.sub-rm,
+.sub-edit {
+  position: absolute; top: 6px;
   width: 22px; height: 22px; border-radius: 999px;
   color: var(--ink-faint);
   font-size: 14px; line-height: 22px;
-  opacity: 0.3; transition: opacity 0.15s;
+  opacity: 0.3; transition: opacity 0.15s, color 0.15s, background 0.15s;
+  display: grid; place-items: center;
 }
-.sub-row:hover .sub-rm { opacity: 1; }
+.sub-rm { right: 6px; }
+.sub-edit { right: 32px; color: var(--seal); }
+.sub-edit svg { display: block; }
+.sub-row:hover .sub-rm,
+.sub-row:hover .sub-edit { opacity: 1; }
+.sub-edit:hover { background: var(--accent-soft); }
+.sub-rm:hover { background: var(--accent-soft); color: var(--err); }
 .sub-rm:hover { color: var(--err); }
 
 /* Biography */
@@ -582,10 +637,89 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
 .hit-title { font-weight: 600; font-size: 14px; color: var(--ink); text-decoration: none; }
 .hit-title:hover { color: var(--seal); text-decoration: underline; }
 .hit-snippet { font-size: 12px; color: var(--ink-soft); margin-top: 2px; line-height: 1.4; }
-.hit-conf { font-size: 10px; color: var(--ink-faint); margin-top: 4px; letter-spacing: 0.04em; }
+.hit-conf { font-size: 10px; color: var(--ink-faint); margin-top: 6px; letter-spacing: 0.04em; display: flex; align-items: center; gap: 8px; }
+.hit-conf-bar {
+  width: 80px; height: 4px; border-radius: 2px;
+  background: var(--paper-sunk); overflow: hidden; flex-shrink: 0;
+}
+.hit-conf-fill { height: 100%; background: var(--seal); transition: width 0.3s; }
 .hit-actions { display: flex; flex-direction: column; gap: 4px; }
 .btn-outline.small { padding: 4px 10px; font-size: 11px; min-height: 28px; }
 .ext-head { margin-bottom: var(--sp-3); }
+
+/* Consensus box */
+.consensus-box {
+  margin-bottom: var(--sp-4);
+  padding: var(--sp-3);
+  background: color-mix(in oklch, var(--paper-raised) 70%, var(--gold) 15%);
+  border: 1px solid color-mix(in oklch, var(--gold) 30%, var(--line));
+  border-radius: var(--radius-md);
+}
+.consensus-row {
+  display: grid;
+  grid-template-columns: 90px 1fr auto auto;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 12px;
+  align-items: baseline;
+  border-top: 1px dashed color-mix(in oklch, var(--line) 60%, transparent);
+}
+.consensus-row:first-of-type { border-top: 0; }
+.consensus-field { font-weight: 600; color: var(--ink-soft); text-transform: lowercase; }
+.consensus-value { font-weight: 500; color: var(--ink); }
+.consensus-count { color: var(--seal); font-weight: 600; font-size: 11px; }
+.consensus-sources { color: var(--ink-faint); font-size: 10px; }
+
+/* Source status grid */
+.source-grid-wrap { margin-bottom: var(--sp-3); }
+.source-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+  gap: 6px;
+  margin-top: 6px;
+}
+.source-cell {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 10px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  text-align: left;
+  cursor: default;
+  transition: background 0.15s;
+}
+.source-grid button.source-cell { cursor: pointer; }
+.source-grid button.source-cell:hover { background: var(--paper-raised); }
+.source-cell-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ink-faint);
+}
+.source-cell[data-state="done"] .source-cell-dot,
+.source-cell[data-state="cached"] .source-cell-dot { background: var(--seal); }
+.source-cell[data-state="running"] .source-cell-dot {
+  background: var(--gold);
+  animation: pulse 1s infinite;
+}
+.source-cell[data-state="failed"] .source-cell-dot { background: var(--err); }
+.source-cell[data-state="noted"] .source-cell-dot { background: var(--line-strong); }
+.source-cell-label { font-size: 10px; font-weight: 600; letter-spacing: 0.04em; color: var(--ink-soft); }
+.source-cell-count { font-size: 11px; color: var(--ink); font-variant-numeric: tabular-nums; min-width: 20px; text-align: right; }
+
+@keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.4 } }
+
+.scrape-progress {
+  margin-bottom: var(--sp-4);
+  padding: var(--sp-3);
+  background: var(--paper-raised);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-md);
+}
+.scrape-progress .meta { margin-bottom: var(--sp-2); }
+
+.hits-wrap { margin-top: var(--sp-3); }
 
 /* Detail ------------------------------------------------------------- */
 .detail-empty {

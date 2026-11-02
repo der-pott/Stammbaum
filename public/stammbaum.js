@@ -73,14 +73,24 @@ const api = {
   async deleteSub(person_id, kind, id) {
     return j(await fetch(`/api/persons/${person_id}/${kind}/${id}`, { method: 'DELETE' }));
   },
-  async scrape(person_id) {
-    return j(await fetch(`/api/persons/${person_id}/research/scrape`, { method: 'POST' }));
+  async scrape(person_id, sources) {
+    return j(await fetch(`/api/persons/${person_id}/research/scrape`, postJson({ sources: sources || null })));
+  },
+  async scrapeSource(person_id, key) {
+    return j(await fetch(`/api/persons/${person_id}/research/scrape-source/${key}`, postJson({ use_cache: false })));
+  },
+  async scrapeJob(job_id) {
+    return j(await fetch(`/api/research/jobs/${job_id}`));
   },
   async listHits(person_id) {
     return j(await fetch(`/api/persons/${person_id}/research/hits`));
   },
   async applyHit(hit_id, action) {
     return j(await fetch(`/api/research/hits/${hit_id}/apply`, postJson({ action })));
+  },
+  async researchSources() { return j(await fetch('/api/research/sources')); },
+  async researchConsensus(person_id) {
+    return j(await fetch(`/api/persons/${person_id}/research/consensus`));
   },
 };
 function postJson(data) { return { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) }; }
@@ -429,22 +439,12 @@ function computeLayout() {
     homeOfPerson.set(p.id, uid);
   }
 
-  // Index units by id
-  const unitById = new Map(units.map(u => [u.id, u]));
-  // For couple-units with children, those children's home is this unit (set above).
-  // For couple-units without shared children, both members still belong to their
-  // own home units (as children elsewhere) — the couple-unit still provides the
-  // marriage-pair position, but we must detect this.
-
-  // --- walk tree: compute subtree widths bottom-up ---------------------
-  // A unit's subtree spans: horizontal space needed to render its members
-  // AND all of its descendant units underneath.
-
-  // children of a unit = list of child units (the children themselves are
-  // units whose members are the children's own couple or singleton).
-  // The child's "placement unit" is the unit that is their primary carrier at
-  // the next generation. We define: for each child person, their placement unit
-  // is any couple-unit they are a member of; if none, their own singleton unit.
+  // Placement units: WHERE each person is drawn on the canvas.
+  // Distinct from HOME units (where they appear as a child of their parents).
+  //   - If person is a spouse in some couple-unit → that couple is their placement.
+  //   - Else they get a DEDICATED singleton placement-unit (even if they have
+  //     parents and are listed in their parents' home-unit's children — this
+  //     dedicated placement is what gets positioned under the parent couple).
   const placementOfPerson = new Map();
   for (const u of units) {
     if (u.members.length >= 2) {
@@ -453,19 +453,40 @@ function computeLayout() {
       }
     }
   }
-  // singletons: anyone not yet placed → their home unit
   for (const p of state.persons) {
-    if (!placementOfPerson.has(p.id)) placementOfPerson.set(p.id, homeOfPerson.get(p.id));
+    if (placementOfPerson.has(p.id)) continue;
+    // Reuse an existing singleton home-unit if one already exists for this
+    // person (parentless orphans created in step 3 above).
+    const homeUid = homeOfPerson.get(p.id);
+    if (homeUid) {
+      const home = units.find(u => u.id === homeUid);
+      if (home && home.members.length === 1 && home.members[0] === p.id) {
+        placementOfPerson.set(p.id, homeUid);
+        continue;
+      }
+    }
+    // Dedicated placement singleton.
+    const uid = `p${unitCounter++}`;
+    const u = { id: uid, members: [p.id], children: [] };
+    units.push(u);
+    placementOfPerson.set(p.id, uid);
   }
 
+  // Index units by id (after all units — including placement singletons — exist).
+  const unitById = new Map(units.map(u => [u.id, u]));
+
   // Children of a unit (as child-units) = unique placement units of its children.
+  // Never reference the unit itself (safety guard).
   const childUnitsOf = new Map();
   for (const u of units) {
     const childUnits = [];
     const seen = new Set();
     for (const cid of u.children) {
       const pid = placementOfPerson.get(cid);
-      if (pid && !seen.has(pid)) { seen.add(pid); childUnits.push(pid); }
+      if (!pid || pid === u.id) continue;
+      if (seen.has(pid)) continue;
+      seen.add(pid);
+      childUnits.push(pid);
     }
     childUnitsOf.set(u.id, childUnits);
   }
@@ -720,10 +741,44 @@ function renderTree() {
   const edgeG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   edgeG.setAttribute('class', 'edges');
 
+  // Index spouse edges for status lookup.
+  const spouseEdgeMap = new Map();
+  for (const e of state.edges) {
+    if (e.type !== 'spouse') continue;
+    const k = e.from_id < e.to_id ? `${e.from_id}|${e.to_id}` : `${e.to_id}|${e.from_id}`;
+    spouseEdgeMap.set(k, e);
+  }
+
+  function marriageGlyph(status) {
+    // Returns { symbol, cls, label } for the given marriage status.
+    switch (status) {
+      case 'divorced': return { symbol: '',  cls: 'edge-glyph divorced', label: 'geschieden' };
+      case 'widowed':  return { symbol: '❤', cls: 'edge-glyph widowed',  label: 'verwitwet'  };
+      case 'engaged':  return { symbol: '◯', cls: 'edge-glyph engaged',  label: 'verlobt'    };
+      case 'partner':  return { symbol: '∞', cls: 'edge-glyph partner',  label: 'Partner'    };
+      case 'married':
+      default:         return { symbol: '❤', cls: 'edge-glyph married',  label: null         };
+    }
+  }
+
+  function drawDivorceSlashes(parent, cx, cy) {
+    // Two parallel diagonal slash marks across the line midpoint.
+    const SLASH_LEN = 10;
+    const SLASH_SPACING = 6;
+    for (const dx of [-SLASH_SPACING / 2, SLASH_SPACING / 2]) {
+      const s = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      s.setAttribute('x1', cx + dx - SLASH_LEN / 2);
+      s.setAttribute('y1', cy + SLASH_LEN / 2);
+      s.setAttribute('x2', cx + dx + SLASH_LEN / 2);
+      s.setAttribute('y2', cy - SLASH_LEN / 2);
+      s.setAttribute('class', 'edge-slash');
+      parent.appendChild(s);
+    }
+  }
+
   // 1. Marriage/spouse edges: horizontal connector between the two spouse circles
-  //    + ❤ symbol centered on the line. Only draw for couples we actually placed
-  //    next to each other (same unit, members.length === 2) OR fallback to a
-  //    direct connector for spouses in different units.
+  //    + status glyph centered on the line. Only draw for couples we actually
+  //    placed next to each other (same unit, members.length === 2).
   const drawnCouples = new Set();
   for (const u of unitById.values()) {
     if (u.members.length !== 2) continue;
@@ -732,6 +787,9 @@ function renderTree() {
     if (!na || !nb) continue;
     const key = a < b ? `${a}|${b}` : `${b}|${a}`;
     drawnCouples.add(key);
+    const edge = spouseEdgeMap.get(key);
+    const status = edge?.status || 'married';
+    const glyph = marriageGlyph(status);
     const y = na.y + AVATAR_R;
     const xL = Math.min(na.cx, nb.cx) + AVATAR_R;
     const xR = Math.max(na.cx, nb.cx) - AVATAR_R;
@@ -739,10 +797,19 @@ function renderTree() {
     const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
     line.setAttribute('x1', xL); line.setAttribute('x2', xR);
     line.setAttribute('y1', y);  line.setAttribute('y2', y);
-    line.setAttribute('class', 'edge-spouse');
+    line.setAttribute('class', `edge-spouse status-${status}`);
     edgeG.appendChild(line);
-    const heart = textEl((xL + xR) / 2, y, '❤', { anchor: 'middle', cls: 'edge-heart' });
-    edgeG.appendChild(heart);
+    const mx = (xL + xR) / 2;
+    if (status === 'divorced') {
+      drawDivorceSlashes(edgeG, mx, y);
+    } else if (glyph.symbol) {
+      const sym = textEl(mx, y, glyph.symbol, { anchor: 'middle', cls: glyph.cls });
+      edgeG.appendChild(sym);
+    }
+    if (glyph.label) {
+      const lbl = textEl(mx, y + 14, glyph.label, { anchor: 'middle', cls: `edge-label status-${status}` });
+      edgeG.appendChild(lbl);
+    }
   }
 
   // Draw spouse edges that are not in a placed couple (fallback: dashed arc).
@@ -753,14 +820,25 @@ function renderTree() {
     if (drawnCouples.has(key)) continue;
     const na = posById.get(a), nb = posById.get(b);
     if (!na || !nb) continue;
+    const status = e.status || 'married';
+    const glyph = marriageGlyph(status);
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     const y1 = na.y + AVATAR_R, y2 = nb.y + AVATAR_R;
     const mx = (na.cx + nb.cx) / 2;
-    path.setAttribute('d', `M${na.cx},${y1} Q${mx},${(y1 + y2) / 2 - 30} ${nb.cx},${y2}`);
-    path.setAttribute('class', 'edge-spouse-remote');
+    const my = (y1 + y2) / 2 - 30;
+    path.setAttribute('d', `M${na.cx},${y1} Q${mx},${my} ${nb.cx},${y2}`);
+    path.setAttribute('class', `edge-spouse-remote status-${status}`);
     edgeG.appendChild(path);
-    const heart = textEl(mx, (y1 + y2) / 2 - 30, '❤', { anchor: 'middle', cls: 'edge-heart' });
-    edgeG.appendChild(heart);
+    if (status === 'divorced') {
+      drawDivorceSlashes(edgeG, mx, my);
+    } else if (glyph.symbol) {
+      const sym = textEl(mx, my, glyph.symbol, { anchor: 'middle', cls: glyph.cls });
+      edgeG.appendChild(sym);
+    }
+    if (glyph.label) {
+      const lbl = textEl(mx, my + 14, glyph.label, { anchor: 'middle', cls: `edge-label status-${status}` });
+      edgeG.appendChild(lbl);
+    }
   }
 
   // 2. Parent / child drop-lines (T-shape, right angles).
@@ -1249,7 +1327,11 @@ async function loadSub(kind, personId, body, renderOne) {
     for (const it of items) {
       const row = renderOne(it);
       if (state.role === 'editor') {
-        const rm = h('button', { class: 'sub-rm', title: 'Entfernen' }, '×');
+        const edit = h('button', { class: 'sub-edit', title: 'Bearbeiten', 'aria-label': 'Bearbeiten' });
+        edit.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M4 20h4L20 8l-4-4L4 16v4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
+        edit.onclick = () => openSubDialog(kind, personId, it);
+        row.appendChild(edit);
+        const rm = h('button', { class: 'sub-rm', title: 'Entfernen', 'aria-label': 'Entfernen' }, '×');
         rm.onclick = async () => {
           if (!confirm('Diesen Eintrag löschen?')) return;
           await api.deleteSub(personId, kind, it.id);
@@ -1343,12 +1425,13 @@ const SUB_FIELDS = {
   ],
 };
 
-function openSubDialog(kind, personId) {
+function openSubDialog(kind, personId, existing = null) {
   const dlg = document.getElementById('sub-dialog') || createSubDialog();
   const form = dlg.querySelector('form');
   form.innerHTML = '';
   const title = { jobs: 'Beruf', residences: 'Wohnort', military: 'Militärdienst', anecdotes: 'Anekdote', 'health-events': 'Gesundheitseintrag' }[kind];
-  form.appendChild(h('h2', { class: 'dlg-title' }, 'Neuer Eintrag · ' + title));
+  const isEdit = !!existing;
+  form.appendChild(h('h2', { class: 'dlg-title' }, (isEdit ? 'Eintrag bearbeiten · ' : 'Neuer Eintrag · ') + title));
   const fields = SUB_FIELDS[kind] || [];
   for (const f of fields) {
     const wrap = h('label', { class: 'field' });
@@ -1359,12 +1442,16 @@ function openSubDialog(kind, personId) {
     else input = h('input', { type: 'text', name: f.name, maxlength: '400' });
     if (f.placeholder) input.setAttribute('placeholder', f.placeholder);
     if (f.required) input.setAttribute('required', '');
+    if (isEdit && existing[f.name] != null) {
+      if (f.type === 'checkbox') input.checked = !!Number(existing[f.name]);
+      else input.value = existing[f.name];
+    }
     wrap.appendChild(input);
     form.appendChild(wrap);
   }
   const menu = h('menu', { class: 'dlg-actions' },
     (() => { const b = h('button', { type: 'button', class: 'btn-ghost' }, 'Abbrechen'); b.onclick = () => dlg.close(); return b; })(),
-    h('button', { type: 'submit', class: 'btn-primary' }, 'Speichern'),
+    h('button', { type: 'submit', class: 'btn-primary' }, isEdit ? 'Aktualisieren' : 'Speichern'),
   );
   form.appendChild(menu);
   form.onsubmit = async (ev) => {
@@ -1372,7 +1459,8 @@ function openSubDialog(kind, personId) {
     const data = Object.fromEntries(new FormData(form));
     for (const f of fields) if (f.type === 'checkbox') data[f.name] = form.querySelector(`[name="${f.name}"]`).checked ? '1' : '';
     try {
-      await api.createSub(personId, kind, data);
+      if (isEdit) await api.updateSub(personId, kind, existing.id, data);
+      else await api.createSub(personId, kind, data);
       dlg.close();
       renderDetail();
     } catch (e) { alert('Fehler: ' + e.message); }
@@ -1443,42 +1531,153 @@ function maybeAutoGenerateBio(p) {
 }
 
 /* --- external research hits ---------------------------------------- */
+const activeJobPolls = new Map(); // personId → setInterval token
+
 async function loadResearchHits(personId) {
   const body = document.getElementById('ext-sources-body');
   if (!body) return;
   try {
-    const hits = await api.listHits(personId);
+    const [sources, hits, consensusResp] = await Promise.all([
+      api.researchSources().catch(() => []),
+      api.listHits(personId),
+      api.researchConsensus(personId).catch(() => ({ consensus: [] })),
+    ]);
     body.innerHTML = '';
+    renderConsensus(body, consensusResp?.consensus || []);
+    renderSourceGrid(body, sources, hits, personId);
+    renderHitsList(body, hits, personId);
     if (state.role === 'editor') {
-      body.appendChild(h('div', { class: 'ext-head' },
-        btnOutline('🔎 Alle Quellen durchsuchen', () => scrapeHits(personId)),
+      body.appendChild(h('div', { class: 'ext-head', style: 'margin-top: 16px' },
+        btnOutline('🔎 Recherche starten', () => scrapeHits(personId)),
       ));
-    }
-    if (!hits.length) {
-      body.appendChild(h('div', { class: 'meta' }, 'Noch keine externen Treffer. Wikidata-Suche gestartet werden kann hier.'));
-      return;
-    }
-    for (const hit of hits) {
-      body.appendChild(renderHit(hit, personId));
     }
   } catch (e) {
     body.innerHTML = '';
     body.appendChild(h('div', { class: 'meta' }, 'Fehler: ' + e.message));
   }
 }
+
+function renderConsensus(parent, consensus) {
+  if (!consensus.length) return;
+  const box = h('div', { class: 'consensus-box' },
+    h('div', { class: 'eyebrow' }, 'Übereinstimmungen (≥ 2 Quellen)'),
+    ...consensus.slice(0, 8).map(c => h('div', { class: 'consensus-row' },
+      h('span', { class: 'consensus-field' }, consensusFieldLabel(c.field)),
+      h('span', { class: 'consensus-value' }, c.value),
+      h('span', { class: 'consensus-count' }, `${c.source_count}× ✓`),
+      h('span', { class: 'consensus-sources' }, c.sources.join(' · ')),
+    )),
+  );
+  parent.appendChild(box);
+}
+function consensusFieldLabel(f) {
+  const m = { birth: 'Geburt', death: 'Tod', year: 'Jahr', mentioned_year: 'erwähnt', place: 'Ort', birth_death_hint: 'Datum-Hinweis' };
+  return m[f] || f;
+}
+
+function renderSourceGrid(parent, sources, hits, personId) {
+  if (!sources.length) return;
+  const counts = {};
+  for (const h of hits) counts[h.source] = (counts[h.source] || 0) + 1;
+  const grid = h('div', { class: 'source-grid' });
+  for (const s of sources) {
+    const n = counts[s.key] || 0;
+    const state_ = n > 0 ? 'done' : (s.note ? 'noted' : 'idle');
+    const cell = h('button', {
+      class: 'source-cell',
+      'data-state': state_,
+      title: s.label + (s.note ? ` · ${s.note}` : ''),
+    },
+      h('div', { class: 'source-cell-dot' }),
+      h('div', { class: 'source-cell-label' }, s.key.toUpperCase()),
+      h('div', { class: 'source-cell-count' }, n ? String(n) : '—'),
+    );
+    if (state.role === 'editor') {
+      cell.onclick = async () => {
+        cell.setAttribute('data-state', 'running');
+        try {
+          await api.scrapeSource(personId, s.key);
+        } catch (e) { /* ignore */ }
+        await loadResearchHits(personId);
+      };
+    }
+    grid.appendChild(cell);
+  }
+  parent.appendChild(h('div', { class: 'source-grid-wrap' },
+    h('div', { class: 'eyebrow' }, 'Quellen'),
+    grid,
+  ));
+}
+
+function renderHitsList(parent, hits, personId) {
+  if (!hits.length) {
+    parent.appendChild(h('div', { class: 'meta', style: 'margin-top: 12px' },
+      'Noch keine externen Treffer gespeichert. "Recherche starten" scannt 17 Quellen.'));
+    return;
+  }
+  const bySource = {};
+  for (const hit of hits) (bySource[hit.source] ||= []).push(hit);
+  const wrap = h('div', { class: 'hits-wrap' },
+    h('div', { class: 'eyebrow' }, `Treffer (${hits.length})`),
+  );
+  for (const [src, group] of Object.entries(bySource)) {
+    for (const hit of group) wrap.appendChild(renderHit(hit, personId));
+  }
+  parent.appendChild(wrap);
+}
+
 async function scrapeHits(personId) {
   const body = document.getElementById('ext-sources-body');
   if (!body) return;
-  body.innerHTML = '';
-  body.appendChild(h('div', { class: 'meta' }, 'Externe Quellen werden abgefragt…'));
+  const progress = h('div', { class: 'scrape-progress' },
+    h('div', { class: 'meta' }, 'Recherche läuft…'),
+    h('div', { id: 'scrape-progress-grid', class: 'source-grid progress-grid' }),
+  );
+  body.insertBefore(progress, body.firstChild);
+  let job;
   try {
-    await api.scrape(personId);
-    await loadResearchHits(personId);
+    const { job_id } = await api.scrape(personId);
+    job = job_id;
   } catch (e) {
-    body.innerHTML = '';
-    body.appendChild(h('div', { class: 'meta' }, 'Fehler: ' + e.message));
+    progress.remove();
+    alert('Konnte Recherche-Job nicht starten: ' + e.message);
+    return;
+  }
+  // Clear previous poll
+  if (activeJobPolls.has(personId)) clearInterval(activeJobPolls.get(personId));
+  const interval = setInterval(async () => {
+    try {
+      const info = await api.scrapeJob(job);
+      renderProgressGrid(info);
+      if (info.status === 'done' || info.status === 'failed' || info.status === 'cancelled') {
+        clearInterval(interval);
+        activeJobPolls.delete(personId);
+        await loadResearchHits(personId);
+      }
+    } catch (e) {
+      clearInterval(interval);
+      activeJobPolls.delete(personId);
+    }
+  }, 2000);
+  activeJobPolls.set(personId, interval);
+}
+
+function renderProgressGrid(job) {
+  const grid = document.getElementById('scrape-progress-grid');
+  if (!grid) return;
+  grid.innerHTML = '';
+  const statuses = job.source_statuses || {};
+  for (const key of (job.sources || [])) {
+    const s = statuses[key] || { state: 'queued' };
+    const cell = h('div', { class: 'source-cell', 'data-state': s.state },
+      h('div', { class: 'source-cell-dot' }),
+      h('div', { class: 'source-cell-label' }, key.toUpperCase()),
+      h('div', { class: 'source-cell-count' }, s.count ? String(s.count) : (s.state === 'running' ? '…' : '—')),
+    );
+    grid.appendChild(cell);
   }
 }
+
 function renderHit(hit, personId) {
   const row = h('div', { class: 'hit', 'data-status': hit.status || 'pending' },
     h('div', { class: 'hit-src' }, (hit.source || '').toUpperCase()),
@@ -1487,7 +1686,12 @@ function renderHit(hit, personId) {
         ? h('a', { href: hit.url, target: '_blank', rel: 'noopener', class: 'hit-title' }, hit.title || hit.url)
         : h('div', { class: 'hit-title' }, hit.title || '—'),
       h('div', { class: 'hit-snippet' }, hit.snippet || ''),
-      h('div', { class: 'hit-conf' }, 'Konfidenz ' + Math.round((hit.confidence || 0) * 100) + '%'),
+      h('div', { class: 'hit-conf' },
+        h('div', { class: 'hit-conf-bar' },
+          h('div', { class: 'hit-conf-fill', style: `width:${Math.round((hit.confidence || 0) * 100)}%` }),
+        ),
+        h('span', {}, Math.round((hit.confidence || 0) * 100) + '%'),
+      ),
     ),
     state.role === 'editor' && (hit.status === 'pending' || !hit.status) ? h('div', { class: 'hit-actions' },
       btnOutline('Notiz', async () => { await api.applyHit(hit.id, 'add_source_note'); await loadResearchHits(personId); await reload(); }, 'small'),

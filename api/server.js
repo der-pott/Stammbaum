@@ -10,7 +10,9 @@ import {
 } from './db.js';
 import { createAnthropicClient, runResearch } from './research.js';
 import { generateBiography } from './biography.js';
-import { dispatchResearch, listSources } from './research_dispatch.js';
+import { listSources, runSingleSource, SOURCES } from './research_dispatch.js';
+import { startWorker, enqueueJob, getJob } from './scrape_worker.js';
+import { computeConsensus } from './consensus.js';
 import { createRateLimiter } from './ratelimit.js';
 import { gedcomToPayload } from './gedcom.js';
 
@@ -21,6 +23,7 @@ app.use(cookieParser());
 
 seedInitialPins();
 purgeExpiredSessions();
+startWorker();
 
 const anthropic = createAnthropicClient();
 const aiLimiter = createRateLimiter({ limit: 10, windowMs: 60_000 });
@@ -223,8 +226,10 @@ app.get('/api/edges', requireViewer, (_req, res) => {
   res.json(db.prepare('SELECT * FROM edges').all());
 });
 
+const VALID_SPOUSE_STATUS = new Set(['married', 'divorced', 'widowed', 'engaged', 'partner']);
+
 app.post('/api/edges', requireEditor, (req, res) => {
-  const { from_id, to_id, type, since, until } = req.body || {};
+  const { from_id, to_id, type, since, until, status } = req.body || {};
   if (!from_id || !to_id || from_id === to_id) {
     return res.status(400).json({ error: 'from_id and to_id required, must differ' });
   }
@@ -247,12 +252,45 @@ app.post('/api/edges', requireEditor, (req, res) => {
   }
   if (dup) return res.status(409).json({ error: 'edge exists', id: dup.id });
 
+  let edgeStatus = null;
+  if (type === 'spouse') {
+    const s = status || 'married';
+    if (!VALID_SPOUSE_STATUS.has(s)) {
+      return res.status(400).json({ error: `status must be one of ${[...VALID_SPOUSE_STATUS].join(', ')}` });
+    }
+    edgeStatus = s;
+  }
+
   const id = newId();
-  db.prepare(`INSERT INTO edges (id, from_id, to_id, type, since, until, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)`)
-    .run(id, from_id, to_id, type, since || null, until || null, nowIso());
+  db.prepare(`INSERT INTO edges (id, from_id, to_id, type, since, until, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, from_id, to_id, type, since || null, until || null, edgeStatus, nowIso());
   logAudit(req.auth.role, 'edge.create', `${type} ${from_id}->${to_id}`);
   res.status(201).json(db.prepare('SELECT * FROM edges WHERE id=?').get(id));
+});
+
+app.patch('/api/edges/:id', requireEditor, (req, res) => {
+  const row = db.prepare('SELECT * FROM edges WHERE id=?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'edge not found' });
+  const { since, until, status } = req.body || {};
+  const fields = [];
+  const values = [];
+  if (since !== undefined) { fields.push('since=?'); values.push(since || null); }
+  if (until !== undefined) { fields.push('until=?'); values.push(until || null); }
+  if (status !== undefined) {
+    if (row.type !== 'spouse') {
+      return res.status(400).json({ error: 'status only valid on spouse edges' });
+    }
+    if (status !== null && !VALID_SPOUSE_STATUS.has(status)) {
+      return res.status(400).json({ error: `status must be one of ${[...VALID_SPOUSE_STATUS].join(', ')}` });
+    }
+    fields.push('status=?'); values.push(status || null);
+  }
+  if (!fields.length) return res.json(row);
+  values.push(req.params.id);
+  db.prepare(`UPDATE edges SET ${fields.join(', ')} WHERE id=?`).run(...values);
+  logAudit(req.auth.role, 'edge.update', req.params.id);
+  res.json(db.prepare('SELECT * FROM edges WHERE id=?').get(req.params.id));
 });
 
 app.delete('/api/edges/:id', requireEditor, (req, res) => {
@@ -635,30 +673,55 @@ app.post('/api/persons/:id/biography', requireEditor, aiLimiter, async (req, res
 
 app.get('/api/research/sources', requireViewer, (_req, res) => res.json(listSources()));
 
-app.post('/api/persons/:id/research/scrape', requireEditor, aiLimiter, async (req, res) => {
+app.post('/api/persons/:id/research/scrape', requireEditor, aiLimiter, (req, res) => {
+  const person = db.prepare('SELECT id FROM persons WHERE id=?').get(req.params.id);
+  if (!person) return res.status(404).json({ error: 'person not found' });
+  const sourceKeys = Array.isArray(req.body?.sources) && req.body.sources.length
+    ? req.body.sources.filter(k => SOURCES[k])
+    : Object.keys(SOURCES);
+  const jobId = enqueueJob(req.params.id, sourceKeys);
+  logAudit(req.auth.role, 'research.enqueue', `${req.params.id} ${sourceKeys.length} sources`);
+  res.json({ job_id: jobId, person_id: req.params.id, sources: sourceKeys });
+});
+
+app.get('/api/research/jobs/:id', requireViewer, (req, res) => {
+  const job = getJob(req.params.id);
+  if (!job) return res.status(404).json({ error: 'job not found' });
+  res.json(job);
+});
+
+app.post('/api/persons/:id/research/scrape-source/:key', requireEditor, aiLimiter, async (req, res) => {
   const person = db.prepare('SELECT * FROM persons WHERE id=?').get(req.params.id);
   if (!person) return res.status(404).json({ error: 'person not found' });
+  const key = req.params.key;
+  if (!SOURCES[key]) return res.status(400).json({ error: 'unknown source' });
+  const useCache = req.body?.use_cache !== false;
   try {
-    const hits = await dispatchResearch(person);
+    const result = await runSingleSource(key, person, { useCache });
     const now = nowIso();
-    const insert = db.prepare(`INSERT INTO research_hits
-      (id, person_id, source, url, title, snippet, confidence, payload, status, created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?)`);
-    const inserted = [];
+    const insertHit = db.prepare(`
+      INSERT INTO research_hits (id, person_id, source, url, title, snippet, confidence, payload, status, created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(person_id, source, url) DO UPDATE SET
+        title=excluded.title, snippet=excluded.snippet, confidence=excluded.confidence,
+        payload=excluded.payload,
+        status=CASE WHEN research_hits.payload != excluded.payload THEN 'pending' ELSE research_hits.status END
+    `);
     const tx = db.transaction(() => {
-      for (const h of hits) {
-        const id = newId();
-        insert.run(id, req.params.id, h.source, h.url || null, h.title || null,
-          h.snippet || null, h.confidence || 0, JSON.stringify(h.payload || {}), 'pending', now);
-        inserted.push({ id, ...h, status: 'pending', created_at: now });
+      for (const h of result.hits) {
+        insertHit.run(newId(), person.id, h.source, h.url || null, h.title || null, h.snippet || null, h.confidence || 0, JSON.stringify(h.payload || {}), 'pending', now);
       }
     });
     tx();
-    logAudit(req.auth.role, 'research.scrape', `${req.params.id} ${inserted.length} hits`);
-    res.json({ person_id: req.params.id, hits: inserted });
+    logAudit(req.auth.role, 'research.scrape-source', `${req.params.id} ${key}:${result.hits.length}`);
+    res.json({ person_id: req.params.id, source: key, status: result.status, count: result.hits.length });
   } catch (err) {
     res.status(502).json({ error: err?.message || 'scrape failed' });
   }
+});
+
+app.get('/api/persons/:id/research/consensus', requireViewer, (req, res) => {
+  res.json({ person_id: req.params.id, consensus: computeConsensus(req.params.id) });
 });
 
 app.get('/api/persons/:id/research/hits', requireViewer, (req, res) => {

@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&display=swap">
-  <link rel="stylesheet" href="styles.css?v=15">
+  <link rel="stylesheet" href="styles.css?v=16">
 </head>
 <body>
 
@@ -154,7 +154,7 @@
 
 <dialog id="edge-dialog" class="dlg">
   <form method="dialog" id="edge-form">
-    <h2 class="dlg-title">Beziehung anlegen</h2>
+    <h2 class="dlg-title" id="edge-dialog-title">Beziehung anlegen</h2>
     <label class="field">
       <span>Typ</span>
       <select name="type">
@@ -164,6 +164,22 @@
     </label>
     <label class="field"><span>Von</span><select name="from_id"></select></label>
     <label class="field"><span>Zu</span><select name="to_id"></select></label>
+    <div id="edge-spouse-extra" hidden>
+      <label class="field">
+        <span>Status</span>
+        <select name="status">
+          <option value="married">verheiratet ❤</option>
+          <option value="divorced">geschieden</option>
+          <option value="widowed">verwitwet</option>
+          <option value="engaged">verlobt</option>
+          <option value="partner">Lebenspartner ∞</option>
+        </select>
+      </label>
+      <div class="grid-2">
+        <label class="field"><span>Seit</span><input name="since" placeholder="JJJJ-MM-TT oder frei"></label>
+        <label class="field"><span>Bis / Ende</span><input name="until" placeholder="JJJJ-MM-TT oder frei"></label>
+      </div>
+    </div>
     <menu class="dlg-actions">
       <button type="button" data-close class="btn-ghost">Abbrechen</button>
       <button type="submit" class="btn-primary">Speichern</button>
@@ -220,6 +236,6 @@
   <div class="lightbox-caption" id="lightbox-caption"></div>
 </div>
 
-<script src="stammbaum.js?v=16" defer></script>
+<script src="stammbaum.js?v=17" defer></script>
 </body>
 </html>
