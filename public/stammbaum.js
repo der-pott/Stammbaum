@@ -396,8 +396,8 @@ function fitTree(opts = {}) {
   if (opts.all) {
     state.pz.k = Math.max(0.1, target);
   } else if (isMobile) {
-    // Mobile default: readable zoom, user pans horizontally. Fit the HEIGHT so a vertical slice is visible.
-    state.pz.k = Math.max(0.55, Math.min(1, sy * 0.95));
+    // Mobile default: scale so the full HEIGHT fits (no clamp), user pans horizontally.
+    state.pz.k = Math.min(1, sy * 0.95);
   } else {
     state.pz.k = Math.max(target, 0.65);
   }
