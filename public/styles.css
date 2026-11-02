@@ -349,16 +349,15 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
 }
 .edge-spouse.status-engaged,
 .edge-spouse-remote.status-engaged {
-  stroke-dasharray: 3 3;
+  /* solid line, heart glyph differentiates — status chip + Dossier give context */
 }
 .edge-spouse.status-partner,
 .edge-spouse-remote.status-partner {
-  stroke-dasharray: 6 3;
+  /* solid line, same as married */
 }
 .edge-spouse.status-implied,
 .edge-spouse-remote.status-implied {
   stroke: var(--ink-faint);
-  stroke-dasharray: 2 4;
   opacity: 0.6;
 }
 

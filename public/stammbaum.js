@@ -1469,9 +1469,9 @@ function renderTree() {
     switch (status) {
       case 'divorced': return { symbol: '',  cls: 'edge-glyph divorced', label: 'geschieden' };
       case 'widowed':  return { symbol: '❤', cls: 'edge-glyph widowed',  label: 'verwitwet'  };
-      case 'engaged':  return { symbol: '◯', cls: 'edge-glyph engaged',  label: 'verlobt'    };
-      case 'partner':  return { symbol: '∞', cls: 'edge-glyph partner',  label: 'Partner'    };
-      case 'implied':  return { symbol: '?', cls: 'edge-glyph implied',  label: 'vermutet'   };
+      case 'engaged':  return { symbol: '❤', cls: 'edge-glyph engaged',  label: 'verlobt'    };
+      case 'partner':  return { symbol: '❤', cls: 'edge-glyph partner',  label: 'Partner'    };
+      case 'implied':  return { symbol: '❤', cls: 'edge-glyph implied',  label: 'vermutet'   };
       case 'married':
       default:         return { symbol: '❤', cls: 'edge-glyph married',  label: null         };
     }

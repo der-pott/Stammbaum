@@ -68,6 +68,10 @@ const sandbox = {
   localStorage: win.localStorage,
   URL, URLSearchParams,
   Image: class { constructor(){ this.onload = null; } set src(_){} get src(){ return ''; } },
+  MutationObserver: class { constructor(_){} observe(){} disconnect(){} takeRecords(){ return []; } },
+  IntersectionObserver: class { constructor(_){} observe(){} disconnect(){} unobserve(){} },
+  ResizeObserver: class { constructor(_){} observe(){} disconnect(){} unobserve(){} },
+  setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
 };
 sandbox.globalThis = sandbox;
 sandbox.self = sandbox;
