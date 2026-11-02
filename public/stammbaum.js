@@ -54,8 +54,8 @@ const api = {
   async setPortrait(person_id, image_id) {
     return j(await fetch(`/api/persons/${person_id}/portrait`, postJson({ image_id })));
   },
-  async cropPortrait(person_id, image_id, x, y, size) {
-    return j(await fetch(`/api/persons/${person_id}/portrait/crop`, postJson({ image_id, x, y, size })));
+  async cropPortrait(person_id, image_id, x, y, size, rotate) {
+    return j(await fetch(`/api/persons/${person_id}/portrait/crop`, postJson({ image_id, x, y, size, rotate: rotate || 0 })));
   },
   async bio(person_id) {
     const r = await fetch(`/api/persons/${person_id}/biography`);
@@ -2719,19 +2719,65 @@ async function openCropDialog(personId, imageId) {
   const img = document.getElementById('crop-img');
   _crop.personId = personId;
   _crop.imageId = imageId;
+  _crop.rotate = 0;
+  _rawImgCache = null;
   // Default: centered 60% of min side
   _crop.rsize = 0.6;
   _crop.rx = (1 - _crop.rsize) / 2;
   _crop.ry = (1 - _crop.rsize) / 2;
-  img.onload = () => {
-    _crop.natW = img.naturalWidth;
-    _crop.natH = img.naturalHeight;
-    updateCropLayout();
-  };
-  img.src = '/api/images/' + imageId + '?t=' + Date.now();
+  const url = '/api/images/' + imageId + '?t=' + Date.now();
+  img.dataset.rawSrc = url;
+  img.src = ''; // wird gleich via applyRotation gesetzt (Canvas-render)
   _crop.mode = null;
   wireCropHandlers();
   dlg.showModal();
+  // Lade raw und rendere initial (rotation=0)
+  applyRotation();
+}
+
+// Render rotated version of the raw image into #crop-img via offscreen canvas.
+// Vorteile: Coords bleiben einfach (immer in natW×natH des angezeigten Bildes).
+let _rawImgCache = null;
+function applyRotation() {
+  const r = _crop.rotate || 0;
+  const img = document.getElementById('crop-img');
+  // Ensure raw image loaded in cache
+  if (!_rawImgCache || _rawImgCache.src !== img.dataset.rawSrc) {
+    const raw = new Image();
+    raw.crossOrigin = 'anonymous';
+    raw.onload = () => {
+      _rawImgCache = raw;
+      renderRotated();
+    };
+    raw.src = img.dataset.rawSrc || img.src;
+    img.dataset.rawSrc = raw.src;
+    return;
+  }
+  renderRotated();
+
+  function renderRotated() {
+    const raw = _rawImgCache;
+    const rW = raw.naturalWidth, rH = raw.naturalHeight;
+    const outW = (r === 90 || r === 270) ? rH : rW;
+    const outH = (r === 90 || r === 270) ? rW : rH;
+    const canvas = document.createElement('canvas');
+    canvas.width = outW; canvas.height = outH;
+    const ctx = canvas.getContext('2d');
+    ctx.save();
+    ctx.translate(outW / 2, outH / 2);
+    ctx.rotate(r * Math.PI / 180);
+    ctx.drawImage(raw, -rW / 2, -rH / 2);
+    ctx.restore();
+    img.onload = () => {
+      _crop.natW = img.naturalWidth;
+      _crop.natH = img.naturalHeight;
+      _crop.rsize = Math.min(0.6, _crop.rsize || 0.6);
+      _crop.rx = (1 - _crop.rsize) / 2;
+      _crop.ry = (1 - _crop.rsize) / 2;
+      updateCropLayout();
+    };
+    img.src = canvas.toDataURL('image/jpeg', 0.9);
+  }
 }
 
 function updateCropLayout() {
@@ -2766,6 +2812,7 @@ function renderCropPreview() {
   const canvas = document.getElementById('crop-preview');
   const img = document.getElementById('crop-img');
   if (!_crop.natW || !_crop.natH) return;
+  // img ist bereits rotierte Version (siehe applyRotation). Simple Ausschnitt.
   const sidePxNat = _crop.rsize * Math.min(_crop.natW, _crop.natH);
   const leftPx = _crop.rx * _crop.natW;
   const topPx = _crop.ry * _crop.natH;
@@ -2852,13 +2899,21 @@ function wireCropHandlers() {
   stage.addEventListener('pointercancel', onUp);
 
   document.getElementById('crop-cancel').onclick = () => document.getElementById('crop-dialog').close();
+  document.getElementById('crop-rotate-cw').onclick = () => {
+    _crop.rotate = ((_crop.rotate || 0) + 90) % 360;
+    applyRotation();
+  };
+  document.getElementById('crop-rotate-ccw').onclick = () => {
+    _crop.rotate = ((_crop.rotate || 0) + 270) % 360;
+    applyRotation();
+  };
   document.getElementById('crop-save').onclick = async (ev) => {
     ev.preventDefault();
     const btn = ev.currentTarget;
     btn.disabled = true;
     btn.textContent = 'Speichere…';
     try {
-      await api.cropPortrait(_crop.personId, _crop.imageId, _crop.rx, _crop.ry, _crop.rsize);
+      await api.cropPortrait(_crop.personId, _crop.imageId, _crop.rx, _crop.ry, _crop.rsize, _crop.rotate || 0);
       document.getElementById('crop-dialog').close();
       await reload();
       renderDetail();

@@ -178,18 +178,23 @@ app.post('/api/persons/:id/portrait', requireEditor, (req, res) => {
 // To keep square: size interpreted against min(W,H).
 app.post('/api/persons/:id/portrait/crop', requireEditor, async (req, res) => {
   try {
-    const { image_id, x, y, size } = req.body || {};
+    const { image_id, x, y, size, rotate } = req.body || {};
     if (!image_id || typeof x !== 'number' || typeof y !== 'number' || typeof size !== 'number') {
       return res.status(400).json({ error: 'image_id, x, y, size required (floats 0..1)' });
     }
     if (size <= 0.02 || size > 1) return res.status(400).json({ error: 'size must be 0.02..1' });
     if (x < 0 || x > 1 || y < 0 || y > 1) return res.status(400).json({ error: 'x,y must be 0..1' });
+    const rot = Number.isInteger(rotate) && [0, 90, 180, 270].includes(rotate) ? rotate : 0;
     const srcPath = pathJoin(IMAGES_DIR, image_id);
     if (!existsSync(srcPath)) return res.status(404).json({ error: 'source image not found' });
 
-    // Read image metadata
-    const img = sharp(srcPath).rotate();          // apply EXIF rotation
-    const meta = await img.metadata();
+    // Rotation first (0/90/180/270), then read dims of rotated image.
+    // sharp.rotate(angle) with explicit angle skips EXIF-based auto-rotation,
+    // but we chain .rotate() first to normalise EXIF, then .rotate(angle) to apply user rotation.
+    const pre = sharp(srcPath).rotate(); // normalise EXIF orientation
+    const preBuf = await pre.toBuffer();
+    const rotated = sharp(preBuf).rotate(rot);
+    const meta = await rotated.metadata();
     const W = meta.width, H = meta.height;
     if (!W || !H) return res.status(500).json({ error: 'cannot read image dimensions' });
 
@@ -197,8 +202,8 @@ app.post('/api/persons/:id/portrait/crop', requireEditor, async (req, res) => {
     const leftPx = Math.max(0, Math.min(W - sidePx, Math.round(x * W)));
     const topPx  = Math.max(0, Math.min(H - sidePx, Math.round(y * H)));
 
-    const outBuf = await sharp(srcPath)
-      .rotate()
+    const outBuf = await sharp(preBuf)
+      .rotate(rot)
       .extract({ left: leftPx, top: topPx, width: sidePx, height: sidePx })
       .resize(1200, 1200, { fit: 'cover' })
       .jpeg({ quality: 88, progressive: true, mozjpeg: false })

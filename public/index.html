@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&display=swap">
-  <link rel="stylesheet" href="styles.css?v=25">
+  <link rel="stylesheet" href="styles.css?v=26">
 </head>
 <body>
 
@@ -244,6 +244,10 @@
     </aside>
   </div>
   <menu class="dlg-actions">
+    <div class="crop-rotate-group">
+      <button type="button" class="btn-ghost crop-rot-btn" id="crop-rotate-ccw" title="90° gegen den Uhrzeigersinn drehen" aria-label="Links drehen">↺ 90°</button>
+      <button type="button" class="btn-ghost crop-rot-btn" id="crop-rotate-cw" title="90° im Uhrzeigersinn drehen" aria-label="Rechts drehen">↻ 90°</button>
+    </div>
     <button type="button" data-close class="btn-ghost" id="crop-cancel">Abbrechen</button>
     <button type="button" class="btn-primary" id="crop-save">Als Portrait speichern</button>
   </menu>
@@ -266,6 +270,6 @@
   <div class="lightbox-caption" id="lightbox-caption"></div>
 </div>
 
-<script src="stammbaum.js?v=33" defer></script>
+<script src="stammbaum.js?v=34" defer></script>
 </body>
 </html>

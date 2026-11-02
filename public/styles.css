@@ -984,6 +984,16 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
   margin: 0 auto;
   pointer-events: none;
 }
+.dlg-crop .crop-rotate-group {
+  display: inline-flex;
+  gap: var(--sp-2);
+  margin-right: auto;
+}
+.dlg-crop .crop-rot-btn {
+  padding: 6px 10px;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
 .dlg-crop .crop-overlay {
   position: absolute; inset: 0;
   pointer-events: none;
