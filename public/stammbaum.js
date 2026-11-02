@@ -115,6 +115,7 @@ function applyRole() {
   badge.hidden = !loggedIn;
   badge.textContent = state.role ? (state.role === 'editor' ? 'Editor' : 'Betrachter') : '';
   document.getElementById('btn-logout').hidden = !loggedIn;
+  document.getElementById('fab-list').hidden = !loggedIn;
   const canEdit = state.role === 'editor';
   for (const el of document.querySelectorAll('[data-editor]')) el.hidden = !canEdit;
 }
@@ -384,14 +385,18 @@ function fitTree(opts = {}) {
   const canvas = document.getElementById('tree-canvas');
   const cw = canvas.clientWidth, ch = canvas.clientHeight;
   if (!cw || !ch) { requestAnimationFrame(() => fitTree(opts)); return; }
-  const topPad = window.innerWidth < 820 ? 110 : 90;
-  const sx = cw / state.layout.totalW;
-  const sy = (ch - topPad) / state.layout.totalH;
+  const isMobile = window.innerWidth < 820;
+  const topPad = isMobile ? 24 : 90;
+  const sidePad = isMobile ? 16 : 24;
+  const bottomPad = isMobile ? 90 : 24;
+  const sx = (cw - sidePad * 2) / state.layout.totalW;
+  const sy = (ch - topPad - bottomPad) / state.layout.totalH;
   // Default fit: aim for readable zoom; allow pan. "all" variant shows entire tree.
   const target = Math.min(sx, sy, 1) * 0.95;
-  state.pz.k = opts.all ? Math.max(0.1, target) : Math.max(target, 0.65);
-  state.pz.x = (cw - state.layout.totalW * state.pz.k) / 2;
-  state.pz.y = topPad + (ch - topPad - state.layout.totalH * state.pz.k) / 2;
+  // On mobile, always fit the whole tree (no minimum clamp) so nothing is cut off at edges.
+  state.pz.k = (opts.all || isMobile) ? Math.max(0.1, target) : Math.max(target, 0.65);
+  state.pz.x = sidePad + (cw - sidePad * 2 - state.layout.totalW * state.pz.k) / 2;
+  state.pz.y = topPad + (ch - topPad - bottomPad - state.layout.totalH * state.pz.k) / 2;
   renderTree();
 }
 
@@ -495,8 +500,11 @@ function renderTree() {
     }
 
     g.onclick = () => select(n.id);
-    g.onmouseenter = (ev) => showNodeHover(n);
-    g.onmouseleave = () => hideNodeHover();
+    // Hover preview only on hover-capable devices (not touch).
+    if (window.matchMedia('(hover: hover)').matches) {
+      g.onmouseenter = () => showNodeHover(n);
+      g.onmouseleave = () => hideNodeHover();
+    }
     g.setAttribute('tabindex', '0');
     g.setAttribute('role', 'button');
     g.setAttribute('aria-label', `${nmText}${dates ? ' ' + dates : ''}`);
@@ -1094,6 +1102,7 @@ function wireUp() {
   document.getElementById('btn-help').onclick = () => document.getElementById('help-dialog').showModal();
   document.getElementById('search').oninput = (ev) => { state.filter = ev.target.value; renderList(); };
   document.getElementById('btn-search-mobile').onclick = () => openDrawer('list');
+  document.getElementById('fab-list').onclick = () => openDrawer('list');
   document.getElementById('drawer-backdrop').onclick = () => closeDrawers();
 
   // Lightbox

@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&display=swap">
-  <link rel="stylesheet" href="styles.css?v=11">
+  <link rel="stylesheet" href="styles.css?v=12">
 </head>
 <body>
 
@@ -27,7 +27,7 @@
 
   <nav class="actions" aria-label="Aktionen">
     <span id="role-badge" class="role-badge" hidden></span>
-    <button id="btn-search-mobile" class="icon-btn" data-icon aria-label="Suche" title="Suche (⁠/⁠)">
+    <button id="btn-search-mobile" class="icon-btn" data-icon aria-label="Suche" title="Suche (⁠/⁠)" hidden>
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M20 20l-4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
     </button>
     <button id="btn-theme" class="icon-btn" aria-label="Hell / Dunkel umschalten" title="Hell / Dunkel">
@@ -90,6 +90,11 @@
     <article id="detail" hidden></article>
   </aside>
 </main>
+
+<!-- Mobile FAB: open person list drawer -->
+<button id="fab-list" class="fab-list" aria-label="Personenliste öffnen" title="Personenliste" hidden>
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+</button>
 
 <!-- Mobile drawer backdrop -->
 <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
@@ -215,6 +220,6 @@
   <div class="lightbox-caption" id="lightbox-caption"></div>
 </div>
 
-<script src="stammbaum.js?v=10" defer></script>
+<script src="stammbaum.js?v=11" defer></script>
 </body>
 </html>
