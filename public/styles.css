@@ -465,9 +465,15 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
   grid-template-columns: 96px 1fr auto;
   gap: var(--sp-4);
   align-items: center;
-  padding-bottom: var(--sp-4);
+  padding: var(--sp-4) var(--sp-5);
+  margin: calc(-1 * var(--sp-5)) calc(-1 * var(--sp-5)) var(--sp-5);
   border-bottom: 1px solid var(--line);
-  position: relative;
+  position: sticky;
+  top: calc(-1 * var(--sp-5));
+  z-index: 4;
+  background: color-mix(in oklch, var(--paper-raised) 92%, transparent);
+  backdrop-filter: saturate(1.4) blur(14px);
+  -webkit-backdrop-filter: saturate(1.4) blur(14px);
 }
 .dossier-hero .detail-close {
   position: absolute; top: 0; right: 0;
