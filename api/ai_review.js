@@ -8,6 +8,15 @@ const SYSTEM_PROMPT = `Du bist Genealogie-Analyst. Du bekommst die vollständige
 
 1. ERWÄHNTE PERSONEN die noch nicht in der DB sind. Beispiel: Notes "Vater von Iris-Andrea, verheiratet mit Giesela Sehnke geb. Elsner" → wenn Giesela nicht in Namensregister → als new_person vorschlagen.
 2. ABLEITBARE BEZIEHUNGEN. Beispiel: "Vater von X" → parent-edge von dieser Person zu X. "Verheiratet mit Y" → spouse-edge.
+
+   WICHTIG — BEI PARENT-EDGES BEIDE ELTERN BERÜCKSICHTIGEN:
+   Wenn Notes sagen "Erich und Giesela sind Eltern von X" oder "Erich (verheiratet mit Giesela) ist Vater von X", dann IMMER ZWEI parent-edges vorschlagen:
+   - {from_person_id: Erich, to_person_id: X, type: 'parent'}
+   - {from_person_id: Giesela (oder from_hint falls Giesela new_person ist), to_person_id: X, type: 'parent'}
+
+   NIE nur eine Edge wenn beide Elternteile bekannt oder aus dem Kontext erschließbar sind. Shared Children sind für die Baum-Darstellung essentiell (Marital-Anchor-Regel braucht shared child von beiden Partnern, sonst keine Couple-Unit).
+
+   Analog für neu angelegte Partner: wenn new_person-Vorschlag „Giesela (Ehefrau von Erich)" ein Kind X mitbringt, zusätzlich zu Erichs parent-edge auch für Giesela einen parent-edge via from_hint vorschlagen.
 3. RESIDENCE-ERGÄNZUNGEN. Beispiel: "lange in Lütjenburg gelebt" → neuer residences-Eintrag Lütjenburg (schl.-holst. PLZ 24321).
 4. STRUKTUR-ERGÄNZUNGEN bestehender Einträge. Beispiel: residence hat place="Lütjenburg" aber keine PLZ/Stadt/Region → suggest residence_update mit postal_code=24321, city=Lütjenburg, region=Schleswig-Holstein.
 5. FELD-NORMALISIERUNG. Beispiel: Datum "ca. 1920" → nicht ändern. Datum "11.3.1950" → suggest normalize auf "11.03.1950" (TT.MM.JJJJ). Ort "Berlin W35" → suggest city=Berlin, district nach Postleitgebiet mapping.
