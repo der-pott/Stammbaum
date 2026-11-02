@@ -285,52 +285,94 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
 #tree:active { cursor: grabbing; }
 
 /* Baum-Elemente */
-.year-axis-line { stroke: var(--line); stroke-width: 0.6; stroke-dasharray: 2 4; }
-.year-axis-text {
-  font-family: var(--font-text); font-size: 11px; font-weight: 500;
-  fill: var(--ink-faint); font-variant-numeric: tabular-nums;
-  letter-spacing: 0.04em;
-}
-.year-axis-text.decade { font-size: 12px; fill: var(--ink-soft); font-weight: 600; }
 
-.edge-parent { fill: none; stroke: var(--line-strong); stroke-width: 1; }
-.edge-spouse { fill: none; stroke: var(--seal); stroke-width: 1.4; stroke-dasharray: 3 3; opacity: 0.72; }
+/* Right-angle parent/child drop-lines */
+.edge-parent {
+  fill: none;
+  stroke: var(--line-strong);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+}
+/* Fallback curve for parent edges not covered by a unit */
+.edge-parent-remote {
+  fill: none;
+  stroke: var(--line-strong);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+  opacity: 0.5;
+}
+/* Horizontal spouse line */
+.edge-spouse {
+  stroke: var(--seal);
+  stroke-width: 1.3;
+  opacity: 0.85;
+}
+.edge-spouse-remote {
+  fill: none;
+  stroke: var(--seal);
+  stroke-width: 1.2;
+  stroke-dasharray: 3 3;
+  opacity: 0.6;
+}
+.edge-heart {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", var(--font-text);
+  font-size: 14px;
+  fill: var(--seal);
+  dominant-baseline: central;
+  user-select: none;
+  pointer-events: none;
+}
 
 .node { cursor: pointer; }
-.node-plate {
-  fill: var(--paper-raised);
-  stroke: var(--line);
-  stroke-width: 0.75;
-  filter: drop-shadow(0 1px 2px color-mix(in oklch, var(--ink) 18%, transparent));
-  transition: stroke 0.15s, fill 0.15s;
-}
-.node:hover .node-plate { stroke: var(--seal); }
-.node.selected .node-plate { stroke: var(--seal); stroke-width: 1.75; fill: color-mix(in oklch, var(--paper-raised) 85%, var(--seal) 15%); }
+
+/* Round portrait */
 .node-avatar {
-  fill: var(--paper-sunk);
-  stroke: var(--line);
-  stroke-width: 0.75;
+  fill: var(--paper-raised);
+  stroke: var(--line-strong);
+  stroke-width: 1;
+  filter: drop-shadow(0 2px 4px color-mix(in oklch, var(--ink) 18%, transparent));
+  transition: stroke 0.15s, filter 0.15s;
 }
-.node.m .node-avatar { fill: color-mix(in oklch, var(--paper-sunk) 85%, oklch(0.72 0.08 245) 15%); }
-.node.f .node-avatar { fill: color-mix(in oklch, var(--paper-sunk) 85%, oklch(0.72 0.1 15) 15%); }
+.node.m .node-avatar { fill: color-mix(in oklch, var(--paper-raised) 82%, oklch(0.72 0.08 245) 18%); }
+.node.f .node-avatar { fill: color-mix(in oklch, var(--paper-raised) 82%, oklch(0.72 0.1 15) 18%); }
+.node-ring {
+  fill: none;
+  stroke: var(--line-strong);
+  stroke-width: 1.2;
+  pointer-events: none;
+  transition: stroke 0.15s, stroke-width 0.15s;
+}
+.node:hover .node-ring { stroke: var(--seal); stroke-width: 2; }
+.node.selected .node-ring { stroke: var(--seal); stroke-width: 2.5; }
+.node:hover .node-avatar { filter: drop-shadow(0 3px 8px color-mix(in oklch, var(--seal) 30%, transparent)); }
+
 .node-initials {
-  font-family: var(--font-text); font-weight: 600; font-size: 11px;
-  fill: var(--ink-soft); text-anchor: middle; dominant-baseline: central;
-  letter-spacing: 0.02em;
+  font-family: var(--font-display); font-weight: 500;
+  font-size: 22px;
+  fill: var(--ink-soft);
+  text-anchor: middle;
+  dominant-baseline: central;
+  letter-spacing: 0.01em;
 }
 .node-name {
-  font-family: var(--font-text); font-weight: 600; font-size: 14px;
-  fill: var(--ink); letter-spacing: -0.01em;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 14px;
+  fill: var(--ink);
+  letter-spacing: -0.005em;
+  dominant-baseline: central;
 }
 .node-dates {
-  font-family: var(--font-text); font-size: 12px; font-weight: 400;
-  fill: var(--ink-faint); font-variant-numeric: tabular-nums;
+  font-family: var(--font-text);
+  font-size: 11px;
+  font-weight: 400;
+  fill: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  dominant-baseline: central;
 }
-.node-sub {
-  font-family: var(--font-text); font-size: 11px;
-  fill: var(--ink-faint); font-style: italic;
-}
-.node-wedding-ring { fill: var(--seal); }
+.node.selected .node-name { fill: var(--seal); }
 
 .tree-hover {
   position: absolute; z-index: 4;
@@ -504,6 +546,20 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
   opacity: 0; transition: opacity 0.15s;
 }
 #detail .image-tile:hover .image-rm { opacity: 1; }
+#detail .image-portrait-btn {
+  position: absolute; top: 4px; left: 4px;
+  width: 22px; height: 22px; border-radius: 999px;
+  background: color-mix(in oklch, var(--paper-raised) 92%, transparent);
+  color: var(--gold);
+  font-size: 14px; line-height: 22px; text-align: center;
+  opacity: 0; transition: opacity 0.15s;
+}
+#detail .image-tile:hover .image-portrait-btn,
+#detail .image-tile.is-portrait .image-portrait-btn { opacity: 1; }
+#detail .image-tile.is-portrait {
+  outline: 2px solid var(--gold);
+  outline-offset: -1px;
+}
 
 /* KI-Panel */
 #detail .ai-run {

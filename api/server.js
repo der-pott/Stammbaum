@@ -124,8 +124,46 @@ app.get('/api/auth/me', (req, res) => {
 /* persons --------------------------------------------------------------- */
 
 app.get('/api/persons', requireViewer, (_req, res) => {
-  const rows = db.prepare('SELECT * FROM persons ORDER BY surname, given_name').all();
+  const rows = db.prepare(`
+    SELECT p.*, (
+      SELECT pi.image_id FROM person_images pi
+      WHERE pi.person_id = p.id AND pi.role = 'Portrait' LIMIT 1
+    ) AS portrait_image_id
+    FROM persons p
+    ORDER BY surname, given_name
+  `).all();
   res.json(rows);
+});
+
+app.get('/api/persons/:id/portrait', requireViewer, (req, res) => {
+  const row = db.prepare(`
+    SELECT i.id, i.mime FROM images i
+    JOIN person_images pi ON pi.image_id = i.id
+    WHERE pi.person_id = ? AND pi.role = 'Portrait' LIMIT 1
+  `).get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'no portrait' });
+  const path = pathJoin(IMAGES_DIR, row.id);
+  if (!existsSync(path)) return res.status(410).json({ error: 'file gone' });
+  res.set('Content-Type', row.mime);
+  res.set('Cache-Control', 'private, max-age=86400');
+  res.send(readFileSync(path));
+});
+
+// Set an image as THE portrait for a person (demotes previous portrait to 'Foto').
+app.post('/api/persons/:id/portrait', requireEditor, (req, res) => {
+  const { image_id } = req.body || {};
+  if (!image_id) return res.status(400).json({ error: 'image_id required' });
+  const link = db.prepare('SELECT role FROM person_images WHERE person_id=? AND image_id=?')
+    .get(req.params.id, image_id);
+  if (!link) return res.status(404).json({ error: 'image not linked to person' });
+  const tx = db.transaction(() => {
+    db.prepare(`UPDATE person_images SET role='Foto' WHERE person_id=? AND role='Portrait'`).run(req.params.id);
+    db.prepare(`UPDATE person_images SET role='Portrait' WHERE person_id=? AND image_id=?`)
+      .run(req.params.id, image_id);
+  });
+  tx();
+  logAudit(req.auth.role, 'portrait.set', `${req.params.id} ${image_id}`);
+  res.json({ ok: true });
 });
 
 app.post('/api/persons', requireEditor, (req, res) => {
@@ -224,7 +262,13 @@ app.delete('/api/edges/:id', requireEditor, (req, res) => {
 /* tree ------------------------------------------------------------------ */
 
 app.get('/api/tree', requireViewer, (_req, res) => {
-  const persons = db.prepare('SELECT * FROM persons').all();
+  const persons = db.prepare(`
+    SELECT p.*, (
+      SELECT pi.image_id FROM person_images pi
+      WHERE pi.person_id = p.id AND pi.role = 'Portrait' LIMIT 1
+    ) AS portrait_image_id
+    FROM persons p
+  `).all();
   const edges = db.prepare('SELECT * FROM edges').all();
   res.json({ persons, edges });
 });
