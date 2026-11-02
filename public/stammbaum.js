@@ -1106,7 +1106,7 @@ function renderTree() {
     return;
   }
 
-  const { nodes, links, posById, totalW, totalH, marginT } = state.layout;
+  const { nodes, links, posById, totalW, totalH, marginT, spouseEdges, slotByAnchor, slotPos, childSlotsOfAnchor, satelliteOf } = state.layout;
 
   const canvas = document.getElementById('tree-canvas');
   const cw = canvas.clientWidth, ch = canvas.clientHeight;
