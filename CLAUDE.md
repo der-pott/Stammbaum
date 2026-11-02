@@ -6,7 +6,9 @@ User droppt Bilder/Dokumente in `/Users/maximilianpott/Projects/Stammbaum/inbox/
 
 Workflow pro File in `inbox/` (ohne `README.md`, `.gitkeep`, `processed/`):
 1. Analyse: welche Person(en), welche Dokumenten-Art.
-2. **Optimieren** vor Upload mit `scripts/optimize_image.sh <in> <out>` → Auto-Trim schwarzer/einheitlicher Ränder (Fuzz 25%), Max-Edge 2000px, JPEG q=85, EXIF-strip. Fallback: wenn Trim > 50% der Fläche abschneidet, Original ohne Trim nehmen.
+2. **Optimieren** vor Upload:
+   - **Portrait / Foto von Person** (role Portrait oder Foto): `scripts/portrait_crop.py <in> <out> --size 1200` → Face-Detection (OpenCV Haar-Cascades), Crop ums Gesicht + Padding für Kopf/Schultern, Quadrat 1200×1200, JPEG q=88. Fallback bei fehlendem Gesicht: Center-Crop Quadrat.
+   - **Dokument / Urkunde / Ausweis** (Papier auf Hintergrund): `scripts/optimize_image.sh <in> <out>` → Auto-Trim schwarzer/einheitlicher Ränder (Fuzz 25%), Max-Edge 2000px, JPEG q=85, EXIF-strip. Fallback: Trim > 50% der Fläche → Original ohne Trim.
 3. Upload des OPTIMIERTEN Files via `/api/images` + `/api/person-images` mit sinnvoller `role`.
 4. Strukturierte Fakten extrahieren (Adressen → `residences`, Berufe → `jobs`, Ausbildung → `education`, Militär → `military`, Lebensdaten → `PATCH persons`, usw. gemäß Regel „Dokumente ausschlachten").
 5. Original (nicht das optimierte) verschieben nach `inbox/processed/YYYY-MM-DD/<originalname>` (nicht löschen, Backup).
