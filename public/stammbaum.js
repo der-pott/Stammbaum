@@ -691,7 +691,6 @@ function computeLayout() {
     satelliteOf.delete(a);
     satelliteOf.delete(b);
   }
-  if (typeof window !== 'undefined') window._lastUpstreamCouples = upstreamCouples;
 
   // Build slots keyed by anchor.
   //
@@ -1058,8 +1057,7 @@ function computeLayout() {
     nodes, links, posById,
     slotByAnchor, slotPos, childSlotsOfAnchor, satelliteOf, spouseEdges,
     forcedSatelliteOf, parentOf, primaryPartnerOf,
-    upstreamNodes, upstreamSpouseKeys, upstreamParentEdgeKeys, upstreamCouples,
-    _debug: { upstreamCouplesSize: upstreamCouples.size, upstreamParentIds: [...upstreamParentIds] },
+    upstreamNodes, upstreamSpouseKeys, upstreamParentEdgeKeys,
     totalW, totalH,
     marginL, marginT,
   };
