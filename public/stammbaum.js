@@ -54,6 +54,9 @@ const api = {
   async setPortrait(person_id, image_id) {
     return j(await fetch(`/api/persons/${person_id}/portrait`, postJson({ image_id })));
   },
+  async cropPortrait(person_id, image_id, x, y, size) {
+    return j(await fetch(`/api/persons/${person_id}/portrait/crop`, postJson({ image_id, x, y, size })));
+  },
   async bio(person_id) {
     const r = await fetch(`/api/persons/${person_id}/biography`);
     if (r.status === 404) return null;
@@ -2266,6 +2269,13 @@ async function loadImagesInto(personId, container) {
           } catch (e) { alert('Fehler: ' + e.message); }
         };
         tile.appendChild(star);
+        const scissors = h('button', { class: 'image-crop-btn', 'aria-label': 'Zu Portrait zuschneiden', title: 'Zu Portrait zuschneiden' });
+        scissors.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" width="14" height="14"><circle cx="6" cy="6" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="6" cy="18" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M20 4L9 15M20 20L9 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+        scissors.onclick = (ev) => {
+          ev.stopPropagation();
+          openCropDialog(personId, img.id);
+        };
+        tile.appendChild(scissors);
       }
       if (state.role === 'editor') {
         const rm = h('button', { class: 'image-rm', 'aria-label': 'Verknüpfung lösen', title: 'Verknüpfung lösen' }, '×');
@@ -2690,6 +2700,179 @@ function wireUp() {
 
   setupPanZoom();
   setupKeyboard();
+}
+
+/* --- Portrait Crop Dialog ------------------------------------------ */
+// State during open dialog
+const _crop = {
+  personId: null, imageId: null, natW: 0, natH: 0,
+  // Relative to stage: box.x, box.y, box.size (in stage pixels)
+  stageW: 0, stageH: 0,
+  // crop region in NORMALIZED image coords (0..1, w.r.t. min(W,H) for size)
+  rx: 0.25, ry: 0.25, rsize: 0.5,
+  mode: null, // 'move' | 'tl' | 'tr' | 'bl' | 'br'
+  startPx: null, startBox: null,
+};
+
+async function openCropDialog(personId, imageId) {
+  const dlg = document.getElementById('crop-dialog');
+  const img = document.getElementById('crop-img');
+  _crop.personId = personId;
+  _crop.imageId = imageId;
+  // Default: centered 60% of min side
+  _crop.rsize = 0.6;
+  _crop.rx = (1 - _crop.rsize) / 2;
+  _crop.ry = (1 - _crop.rsize) / 2;
+  img.onload = () => {
+    _crop.natW = img.naturalWidth;
+    _crop.natH = img.naturalHeight;
+    updateCropLayout();
+  };
+  img.src = '/api/images/' + imageId + '?t=' + Date.now();
+  _crop.mode = null;
+  wireCropHandlers();
+  dlg.showModal();
+}
+
+function updateCropLayout() {
+  const stage = document.getElementById('crop-stage');
+  const img = document.getElementById('crop-img');
+  const rect = img.getBoundingClientRect();
+  // Stage dimensions = displayed image size
+  _crop.stageW = rect.width;
+  _crop.stageH = rect.height;
+  const box = document.getElementById('crop-box');
+  // Convert normalized coords → stage px
+  // Note: _crop.rsize is relative to min(natW, natH). We want same displayed proportion.
+  // Displayed scale factor: display_min / nat_min
+  const scaleW = _crop.stageW / _crop.natW;
+  const scaleH = _crop.stageH / _crop.natH;
+  // image aspect preserved so scaleW === scaleH
+  const scale = scaleW;
+  const sidePxNat = _crop.rsize * Math.min(_crop.natW, _crop.natH);
+  const sidePx = sidePxNat * scale;
+  const leftPx = _crop.rx * _crop.natW * scale;
+  const topPx = _crop.ry * _crop.natH * scale;
+  box.style.left = leftPx + 'px';
+  box.style.top = topPx + 'px';
+  box.style.width = sidePx + 'px';
+  box.style.height = sidePx + 'px';
+  renderCropPreview();
+  const info = document.getElementById('crop-info');
+  info.textContent = `${Math.round(sidePxNat)}×${Math.round(sidePxNat)} px aus ${_crop.natW}×${_crop.natH}`;
+}
+
+function renderCropPreview() {
+  const canvas = document.getElementById('crop-preview');
+  const img = document.getElementById('crop-img');
+  if (!_crop.natW || !_crop.natH) return;
+  const sidePxNat = _crop.rsize * Math.min(_crop.natW, _crop.natH);
+  const leftPx = _crop.rx * _crop.natW;
+  const topPx = _crop.ry * _crop.natH;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, 300, 300);
+  try {
+    ctx.drawImage(img, leftPx, topPx, sidePxNat, sidePxNat, 0, 0, 300, 300);
+  } catch (_) { /* image not yet loaded */ }
+}
+
+function clampCrop() {
+  if (_crop.rsize > 1) _crop.rsize = 1;
+  if (_crop.rsize < 0.05) _crop.rsize = 0.05;
+  // Compute allowed max x/y so square stays in image
+  // Square side in natural px = rsize * min(W,H)
+  const sidePxNat = _crop.rsize * Math.min(_crop.natW, _crop.natH);
+  const maxX = (_crop.natW - sidePxNat) / _crop.natW;
+  const maxY = (_crop.natH - sidePxNat) / _crop.natH;
+  if (_crop.rx < 0) _crop.rx = 0;
+  if (_crop.ry < 0) _crop.ry = 0;
+  if (_crop.rx > maxX) _crop.rx = maxX;
+  if (_crop.ry > maxY) _crop.ry = maxY;
+}
+
+let _cropHandlersWired = false;
+function wireCropHandlers() {
+  if (_cropHandlersWired) return;
+  _cropHandlersWired = true;
+  const stage = document.getElementById('crop-stage');
+  const box = document.getElementById('crop-box');
+
+  const onDown = (ev) => {
+    const target = ev.target;
+    const handle = target.closest('.crop-handle');
+    const inBox = target.closest('#crop-box');
+    if (!handle && !inBox) return;
+    ev.preventDefault();
+    _crop.mode = handle ? handle.getAttribute('data-corner') : 'move';
+    _crop.startPx = { x: ev.clientX, y: ev.clientY };
+    _crop.startBox = { rx: _crop.rx, ry: _crop.ry, rsize: _crop.rsize };
+    stage.setPointerCapture(ev.pointerId);
+  };
+  const onMove = (ev) => {
+    if (!_crop.mode) return;
+    ev.preventDefault();
+    const scale = _crop.stageW / _crop.natW; // stage px per natural px
+    const dxNat = (ev.clientX - _crop.startPx.x) / scale;
+    const dyNat = (ev.clientY - _crop.startPx.y) / scale;
+    const minSide = Math.min(_crop.natW, _crop.natH);
+    const startSidePx = _crop.startBox.rsize * minSide;
+    if (_crop.mode === 'move') {
+      _crop.rx = _crop.startBox.rx + dxNat / _crop.natW;
+      _crop.ry = _crop.startBox.ry + dyNat / _crop.natH;
+    } else {
+      // Resize: aspect-locked. Use max of |dx|,|dy| scaled, direction depends on corner.
+      let delta = 0;
+      switch (_crop.mode) {
+        case 'tl': delta = -(dxNat + dyNat) / 2; break;
+        case 'tr': delta = (dxNat - dyNat) / 2; break;
+        case 'bl': delta = (-dxNat + dyNat) / 2; break;
+        case 'br': delta = (dxNat + dyNat) / 2; break;
+      }
+      const newSidePx = Math.max(minSide * 0.05, startSidePx + delta);
+      _crop.rsize = newSidePx / minSide;
+      // Anchor opposite corner, so adjust rx/ry
+      const sideDelta = newSidePx - startSidePx;
+      switch (_crop.mode) {
+        case 'tl': _crop.rx = _crop.startBox.rx - sideDelta / _crop.natW;  _crop.ry = _crop.startBox.ry - sideDelta / _crop.natH;  break;
+        case 'tr': _crop.ry = _crop.startBox.ry - sideDelta / _crop.natH; break;
+        case 'bl': _crop.rx = _crop.startBox.rx - sideDelta / _crop.natW; break;
+        case 'br': /* bottom-right: top-left anchor stays */ break;
+      }
+    }
+    clampCrop();
+    updateCropLayout();
+  };
+  const onUp = (ev) => {
+    _crop.mode = null;
+    try { stage.releasePointerCapture(ev.pointerId); } catch (_) {}
+  };
+  stage.addEventListener('pointerdown', onDown);
+  stage.addEventListener('pointermove', onMove);
+  stage.addEventListener('pointerup', onUp);
+  stage.addEventListener('pointercancel', onUp);
+
+  document.getElementById('crop-cancel').onclick = () => document.getElementById('crop-dialog').close();
+  document.getElementById('crop-save').onclick = async (ev) => {
+    ev.preventDefault();
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    btn.textContent = 'Speichere…';
+    try {
+      await api.cropPortrait(_crop.personId, _crop.imageId, _crop.rx, _crop.ry, _crop.rsize);
+      document.getElementById('crop-dialog').close();
+      await reload();
+      renderDetail();
+    } catch (e) {
+      alert('Fehler beim Speichern: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Als Portrait speichern';
+    }
+  };
+  window.addEventListener('resize', () => {
+    const dlg = document.getElementById('crop-dialog');
+    if (dlg?.open) updateCropLayout();
+  });
 }
 
 (async function boot() {

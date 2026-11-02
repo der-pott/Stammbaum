@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&display=swap">
-  <link rel="stylesheet" href="styles.css?v=24">
+  <link rel="stylesheet" href="styles.css?v=25">
 </head>
 <body>
 
@@ -219,6 +219,36 @@
   </form>
 </dialog>
 
+<!-- Portrait-Crop Dialog -->
+<dialog id="crop-dialog" class="dlg dlg-crop" aria-label="Portrait zuschneiden">
+  <div class="crop-head">
+    <h2 class="dlg-title">Zu Portrait zuschneiden</h2>
+    <p class="dlg-sub">Verschiebe und skaliere den Rahmen, bis das Gesicht gut sitzt. Das Portrait ist immer quadratisch.</p>
+  </div>
+  <div class="crop-body">
+    <div class="crop-stage" id="crop-stage">
+      <img id="crop-img" alt="">
+      <div id="crop-overlay" class="crop-overlay">
+        <div id="crop-box" class="crop-box">
+          <span class="crop-handle" data-corner="tl"></span>
+          <span class="crop-handle" data-corner="tr"></span>
+          <span class="crop-handle" data-corner="bl"></span>
+          <span class="crop-handle" data-corner="br"></span>
+        </div>
+      </div>
+    </div>
+    <aside class="crop-preview-wrap">
+      <div class="crop-preview-title">Vorschau</div>
+      <canvas id="crop-preview" class="crop-preview" width="300" height="300"></canvas>
+      <div id="crop-info" class="crop-info"></div>
+    </aside>
+  </div>
+  <menu class="dlg-actions">
+    <button type="button" data-close class="btn-ghost" id="crop-cancel">Abbrechen</button>
+    <button type="button" class="btn-primary" id="crop-save">Als Portrait speichern</button>
+  </menu>
+</dialog>
+
 <!-- Lightbox -->
 <div id="lightbox" class="lightbox" hidden role="dialog" aria-modal="true" aria-label="Dokument-Vollansicht">
   <button class="lightbox-close icon-btn" id="lightbox-close" aria-label="Schließen">
@@ -236,6 +266,6 @@
   <div class="lightbox-caption" id="lightbox-caption"></div>
 </div>
 
-<script src="stammbaum.js?v=32" defer></script>
+<script src="stammbaum.js?v=33" defer></script>
 </body>
 </html>

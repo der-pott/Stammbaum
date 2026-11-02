@@ -15,6 +15,7 @@ import { startWorker, enqueueJob, getJob } from './scrape_worker.js';
 import { computeConsensus } from './consensus.js';
 import { createRateLimiter } from './ratelimit.js';
 import { gedcomToPayload } from './gedcom.js';
+import sharp from 'sharp';
 
 const app = express();
 app.set('trust proxy', true);
@@ -169,6 +170,66 @@ app.post('/api/persons/:id/portrait', requireEditor, (req, res) => {
   tx();
   logAudit(req.auth.role, 'portrait.set', `${req.params.id} ${image_id}`);
   res.json({ ok: true });
+});
+
+// Manual portrait crop: user picks square region in UI, we extract + resize + save as new image.
+// Body: {image_id, x, y, size} — all relative 0..1 of original image dimensions
+// (x,y top-left; size = side length relative to min(W,H), or absolute if --- we use absolute: w*size, h*size won't be square unless we normalize).
+// To keep square: size interpreted against min(W,H).
+app.post('/api/persons/:id/portrait/crop', requireEditor, async (req, res) => {
+  try {
+    const { image_id, x, y, size } = req.body || {};
+    if (!image_id || typeof x !== 'number' || typeof y !== 'number' || typeof size !== 'number') {
+      return res.status(400).json({ error: 'image_id, x, y, size required (floats 0..1)' });
+    }
+    if (size <= 0.02 || size > 1) return res.status(400).json({ error: 'size must be 0.02..1' });
+    if (x < 0 || x > 1 || y < 0 || y > 1) return res.status(400).json({ error: 'x,y must be 0..1' });
+    const srcPath = pathJoin(IMAGES_DIR, image_id);
+    if (!existsSync(srcPath)) return res.status(404).json({ error: 'source image not found' });
+
+    // Read image metadata
+    const img = sharp(srcPath).rotate();          // apply EXIF rotation
+    const meta = await img.metadata();
+    const W = meta.width, H = meta.height;
+    if (!W || !H) return res.status(500).json({ error: 'cannot read image dimensions' });
+
+    const sidePx = Math.round(size * Math.min(W, H));
+    const leftPx = Math.max(0, Math.min(W - sidePx, Math.round(x * W)));
+    const topPx  = Math.max(0, Math.min(H - sidePx, Math.round(y * H)));
+
+    const outBuf = await sharp(srcPath)
+      .rotate()
+      .extract({ left: leftPx, top: topPx, width: sidePx, height: sidePx })
+      .resize(1200, 1200, { fit: 'cover' })
+      .jpeg({ quality: 88, progressive: true, mozjpeg: false })
+      .toBuffer();
+
+    const newId_ = newId();
+    writeFileSync(pathJoin(IMAGES_DIR, newId_), outBuf);
+    const now = nowIso();
+    db.prepare(`INSERT INTO images (id, mime, bytes, caption, taken_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(newId_, 'image/jpeg', outBuf.length, 'Portrait (manuell zugeschnitten)', null, now);
+
+    // Link + demote prev portrait, in a transaction
+    const tx = db.transaction(() => {
+      db.prepare(`UPDATE person_images SET role='Foto' WHERE person_id=? AND role='Portrait'`).run(req.params.id);
+      db.prepare(`INSERT INTO person_images (person_id, image_id, role, created_at)
+        VALUES (?, ?, 'Portrait', ?)`).run(req.params.id, newId_, now);
+    });
+    tx();
+
+    logAudit(req.auth.role, 'portrait.crop', `${req.params.id} src=${image_id} new=${newId_} ${sidePx}px`);
+    res.status(201).json({
+      new_image_id: newId_,
+      bytes: outBuf.length,
+      crop_px: { left: leftPx, top: topPx, size: sidePx },
+      source: { width: W, height: H },
+    });
+  } catch (err) {
+    console.error('portrait crop error:', err);
+    res.status(500).json({ error: 'crop failed', detail: String(err.message || err) });
+  }
 });
 
 app.post('/api/persons', requireEditor, (req, res) => {
