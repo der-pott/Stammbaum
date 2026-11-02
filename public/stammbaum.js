@@ -1629,6 +1629,27 @@ function renderTree() {
       dropGroups.get(key).kids.push(c);
     }
   }
+  // Extra pass: forced-satellite children (riding in a spouse's slot) still
+  // need an inline T-drop from their birth-parents. Without this they fall
+  // through to the remote-arc fallback and the connection reads as "nach
+  // außen" even though data-wise it is a plain parent→child edge. Every
+  // family line gets the same inline rendering regardless of which spouse's
+  // slot the child was placed in.
+  for (const satId of satelliteOf.keys()) {
+    const pars = parentOfInLayout(satId);
+    if (!pars.length) continue;
+    let parentAnchorId = pars.find(x => isAnchor.has(x));
+    if (!parentAnchorId) {
+      for (const par of pars) {
+        if (satelliteOf.has(par)) { parentAnchorId = satelliteOf.get(par); break; }
+      }
+    }
+    if (!parentAnchorId) continue;
+    const other = pars.find(x => x !== parentAnchorId);
+    const key = `${parentAnchorId}|${other || ''}`;
+    if (!dropGroups.has(key)) dropGroups.set(key, { anchorId: parentAnchorId, coparentId: other || null, kids: [] });
+    if (!dropGroups.get(key).kids.includes(satId)) dropGroups.get(key).kids.push(satId);
+  }
   function parentOfInLayout(childId) {
     const edges = state.edges.filter(e => e.type === 'parent' && e.to_id === childId);
     return edges.map(e => e.from_id);
@@ -1678,12 +1699,10 @@ function renderTree() {
   // slot together (anchor + sat), draw ONE arc from couple midpoint instead
   // of two separate arcs.
   const drawnParent = new Set();
-  for (const anchorId of slotByAnchor.keys()) {
-    const kids = childSlotsOfAnchor.get(anchorId) || [];
-    const slot = slotByAnchor.get(anchorId);
-    for (const c of kids) {
-      drawnParent.add(`${anchorId}|${c}`);
-      for (const s of slot.satellites) drawnParent.add(`${s}|${c}`);
+  for (const g of dropGroups.values()) {
+    for (const c of g.kids) {
+      drawnParent.add(`${g.anchorId}|${c}`);
+      if (g.coparentId) drawnParent.add(`${g.coparentId}|${c}`);
     }
   }
   // Group remote parent-edges per child.
