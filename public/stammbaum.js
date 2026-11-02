@@ -608,22 +608,59 @@ function computeLayout() {
   }
 
   // Build slots keyed by anchor.
+  //
+  // Satellite order: current/active relationships CLOSEST to anchor, ended
+  // ones (divorced, widowed) further out. Within the same group, newer
+  // relationships sit closer to the anchor than older ones.
+  //
+  // One exception: when a mutual-primary couple exists AND is still active
+  // (status != divorced/widowed), that primary partner stays closest. If the
+  // primary is divorced/widowed, status weight wins — a current partner
+  // takes the inner slot.
+  function statusWeight(status) {
+    // Lower = closer to anchor (= more active).
+    switch (status) {
+      case 'married':
+      case 'partner':
+      case 'engaged':
+      case null:
+      case undefined:
+      case '':
+        return 0;
+      case 'widowed':  return 1;
+      case 'divorced': return 2;
+      default:         return 1;
+    }
+  }
   const slotByAnchor = new Map();
   for (const a of isAnchor) {
     const sats = [];
     for (const [sid, aid] of satelliteOf) if (aid === a) sats.push(sid);
-    // Order: primary partner (mutual-couple forced sat) first, then by
-    // edge.since, then by birth-year. Primary partner first keeps the
-    // couple-link clean and places the shared-children drop under the pair.
-    const primary = primaryPartnerOf.get(a);
+    // Satellite order with two conflicting user requests:
+    //  (1) current/active relationships closer to anchor, ended further out
+    //  (2) biological co-parent (shared-kid partner) needs to sit between
+    //      anchor and children-drop so the drop line emerges from a clean
+    //      midpoint (not through another sat's position).
+    //
+    // Compromise: shared-children partners (biological co-parents) always
+    // sit INNER. If multiple shared-kid partners exist, order those by
+    // status weight (current < ended) then by `since` desc. Non-shared sats
+    // sit OUTER, same sub-sort.
+    const hasSharedKids = (satId) => sharedChildrenList(a, satId).length > 0;
     sats.sort((x, y) => {
-      if (x === primary && y !== primary) return -1;
-      if (y === primary && x !== primary) return 1;
+      const bioX = hasSharedKids(x), bioY = hasSharedKids(y);
+      if (bioX && !bioY) return -1;
+      if (bioY && !bioX) return 1;
       const kx = a < x ? `${a}|${x}` : `${x}|${a}`;
       const ky = a < y ? `${a}|${y}` : `${y}|${a}`;
-      const sx = spouseEdges.get(kx)?.since || '';
-      const sy = spouseEdges.get(ky)?.since || '';
-      if (sx !== sy) return sx.localeCompare(sy);
+      const ex = spouseEdges.get(kx);
+      const ey = spouseEdges.get(ky);
+      const wx = statusWeight(ex?.status);
+      const wy = statusWeight(ey?.status);
+      if (wx !== wy) return wx - wy;
+      const sx = ex?.since || '';
+      const sy = ey?.since || '';
+      if (sx !== sy) return sy.localeCompare(sx);
       const bx = year(personById.get(x)?.birth_date) || '9999';
       const by = year(personById.get(y)?.birth_date) || '9999';
       return bx.localeCompare(by);
@@ -970,16 +1007,18 @@ function renderTree() {
     }
   }
 
-  function drawDivorceSlashes(parent, cx, cy) {
-    // Two parallel diagonal slash marks across the line midpoint.
+  function drawDivorceSlashes(parent, cx, cy, yOffset = 0) {
+    // Two parallel diagonal slash marks. yOffset lifts them above the line
+    // so they don't crowd the "GESCHIEDEN" label underneath.
     const SLASH_LEN = 10;
     const SLASH_SPACING = 6;
+    const y = cy + yOffset;
     for (const dx of [-SLASH_SPACING / 2, SLASH_SPACING / 2]) {
       const s = document.createElementNS('http://www.w3.org/2000/svg', 'line');
       s.setAttribute('x1', cx + dx - SLASH_LEN / 2);
-      s.setAttribute('y1', cy + SLASH_LEN / 2);
+      s.setAttribute('y1', y + SLASH_LEN / 2);
       s.setAttribute('x2', cx + dx + SLASH_LEN / 2);
-      s.setAttribute('y2', cy - SLASH_LEN / 2);
+      s.setAttribute('y2', y - SLASH_LEN / 2);
       s.setAttribute('class', 'edge-slash');
       parent.appendChild(s);
     }
@@ -1007,13 +1046,14 @@ function renderTree() {
     edgeG.appendChild(line);
     const mx = (xL + xR) / 2;
     if (status === 'divorced') {
-      drawDivorceSlashes(edgeG, mx, y);
+      // Lift slashes above the line; label sits well below.
+      drawDivorceSlashes(edgeG, mx, y, -10);
     } else if (glyph.symbol) {
       const sym = textEl(mx, y, glyph.symbol, { anchor: 'middle', cls: glyph.cls });
       edgeG.appendChild(sym);
     }
     if (glyph.label) {
-      const lbl = textEl(mx, y + 14, glyph.label, { anchor: 'middle', cls: `edge-label status-${status}` });
+      const lbl = textEl(mx, y + 20, glyph.label, { anchor: 'middle', cls: `edge-label status-${status}` });
       edgeG.appendChild(lbl);
     }
   }
@@ -1050,13 +1090,13 @@ function renderTree() {
     path.setAttribute('class', `edge-spouse-remote status-${status}`);
     edgeG.appendChild(path);
     if (status === 'divorced') {
-      drawDivorceSlashes(edgeG, mx, my);
+      drawDivorceSlashes(edgeG, mx, my, -10);
     } else if (glyph.symbol) {
       const sym = textEl(mx, my, glyph.symbol, { anchor: 'middle', cls: glyph.cls });
       edgeG.appendChild(sym);
     }
     if (glyph.label) {
-      const lbl = textEl(mx, my + 14, glyph.label, { anchor: 'middle', cls: `edge-label status-${status}` });
+      const lbl = textEl(mx, my + 20, glyph.label, { anchor: 'middle', cls: `edge-label status-${status}` });
       edgeG.appendChild(lbl);
     }
   }
