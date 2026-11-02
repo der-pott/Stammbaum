@@ -40,26 +40,47 @@ const src = readFileSync(join(here, '..', 'public', 'stammbaum.js'), 'utf8');
 // Browser globals the layout code expects. The layout path only touches
 // state.persons/edges, uses measureText (stubbed), and some DOM accessors
 // via renderTree — but we only need computeLayout().
+const noopEl = { setAttribute(){}, appendChild(){}, addEventListener(){}, textContent:'', style:{}, classList: { add(){}, remove(){} }, dataset: {}, hidden: false };
+noopEl.getContext = () => ({ measureText: (s) => ({ width: String(s).length * 7 }), save(){}, restore(){}, clearRect(){}, translate(){}, rotate(){}, scale(){}, drawImage(){} });
+const win = {
+  addEventListener(){}, removeEventListener(){},
+  matchMedia: () => ({ matches: false, addListener(){}, removeListener(){} }),
+  location: { hash: '' },
+  localStorage: { getItem: () => null, setItem(){}, removeItem(){} },
+  dispatchEvent(){}, requestAnimationFrame: () => 0,
+};
 const sandbox = {
   state: { persons: tree.persons, edges: tree.edges },
-  // Minimal browser shims so the module loads.
-  window: {}, document: {
+  window: win,
+  document: {
     getElementById: () => null,
-    createElementNS: () => ({ setAttribute(){}, appendChild(){}, textContent:'', style:{} }),
-    createElement: () => ({ setAttribute(){}, appendChild(){}, textContent:'', style:{}, getContext: () => ({ measureText: (s) => ({ width: s.length * 7 }) }) }),
+    createElementNS: () => ({ ...noopEl }),
+    createElement: () => ({ ...noopEl }),
+    addEventListener(){}, removeEventListener(){},
+    body: { ...noopEl },
+    documentElement: { ...noopEl, dataset: {} },
+    querySelector: () => null, querySelectorAll: () => [],
   },
   console,
   Map, Set,
+  requestAnimationFrame: () => 0,
+  fetch: async () => ({ ok: false, status: 0, json: async () => ({}), text: async () => '' }),
+  localStorage: win.localStorage,
+  URL, URLSearchParams,
+  Image: class { constructor(){ this.onload = null; } set src(_){} get src(){ return ''; } },
 };
+sandbox.globalThis = sandbox;
+sandbox.self = sandbox;
 sandbox.OffscreenCanvas = undefined;
 
+sandbox.__persons = tree.persons;
+sandbox.__edges = tree.edges;
 const ctx = vm.createContext(sandbox);
-// Extract just the body up through the end of computeLayout(). Simpler:
-// strip import/export and run the whole file. Any browser-only side effects
-// are harmless because document/window are stubbed.
 vm.runInContext(src, ctx, { filename: 'stammbaum.js' });
+// The module's own `const state = {...}` shadows our sandbox.state. We mutate
+// that module-scoped state here from the test harness, then call computeLayout.
+vm.runInContext(`state.persons = __persons; state.edges = __edges;`, ctx);
 
-// computeLayout is defined at module scope.
 const layout = ctx.computeLayout?.();
 if (!layout) { console.error('computeLayout returned null'); process.exit(2); }
 

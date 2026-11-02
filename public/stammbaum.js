@@ -1011,24 +1011,30 @@ function computeLayout() {
   // shift the upstream couple laterally. The T-drop in the renderer already
   // bends to the child's actual cx (M mx V barY H child.cx V childTopY), so
   // a horizontal shift is cosmetic — the child-to-parent line stays correct.
-  const COUPLE_W_EFF = NODE_W * 2 + MARRIAGE_GAP;   // visual width of an upstream couple
-  const UPSTREAM_PAD = 24;                           // extra breathing between couples / neighbors
+  //
+  // Collision-aware placement:
+  //  - Try ideal cx (= child.cx) on the gen row directly above.
+  //  - If that collides with an already-placed node in the same y row (either
+  //    a regular slot node or another upstream couple), try shifting left or
+  //    right along the row.
+  //  - If no safe lateral shift exists within one COUPLE_W_EFF of the ideal
+  //    cx, SKIP the upstream placement entirely and restore the pair to the
+  //    normal anchor pipeline — they fall through to the orphan pass and get
+  //    the usual cross-tree dashed birth-arc. This is the safe fallback that
+  //    guarantees no node overlap even in dense trees.
+  const COUPLE_W_EFF = NODE_W * 2 + MARRIAGE_GAP;
+  const UPSTREAM_PAD = 32;
+  const halfW = COUPLE_W_EFF / 2;
   const upstreamNodes = [];
-  // 1) Collect ideal placements.
   const toPlace = [];
   for (const [childId, uc] of upstreamCouples) {
     const childNode = posById.get(childId);
     if (!childNode) continue;
     if (!personById.get(uc.anchorId) || !personById.get(uc.satId)) continue;
-    toPlace.push({ uc, childId, childNode, cx: childNode.cx, y: childNode.y - ROW_H });
+    toPlace.push({ uc, childId, childNode, idealCx: childNode.cx, y: childNode.y - ROW_H });
   }
-  // 2) Sort by ideal cx so we can resolve left→right.
-  toPlace.sort((a, b) => a.cx - b.cx || a.childId.localeCompare(b.childId));
-  // 3) Resolve overlaps:
-  //    - vs. previously placed upstream couple (same y row)
-  //    - vs. regular nodes already in `nodes` at that y row
+  toPlace.sort((a, b) => a.idealCx - b.idealCx || a.childId.localeCompare(b.childId));
   function occupiedRanges(y) {
-    // Return [{left, right}] of nodes in the same horizontal row (within half a NODE_H).
     const ranges = [];
     for (const n of nodes) {
       if (Math.abs(n.y - y) < NODE_H * 0.75) {
@@ -1038,30 +1044,67 @@ function computeLayout() {
     ranges.sort((a, b) => a.left - b.left);
     return ranges;
   }
-  function shiftOutOf(cx, y) {
-    // Find the smallest shift (prefer right, then left) that frees the couple's
-    // horizontal footprint from all occupied ranges in that y row.
-    const halfW = COUPLE_W_EFF / 2;
-    const ranges = occupiedRanges(y);
-    let x1 = cx - halfW, x2 = cx + halfW;
-    // Iteratively nudge right past each conflicting range.
-    let safety = 0;
-    while (safety++ < 50) {
-      const hit = ranges.find(r => !(x2 < r.left || r.right < x1));
-      if (!hit) break;
-      // Shift to just past the right edge of the hit range.
-      const shift = hit.right - x1;
-      x1 += shift; x2 += shift;
+  function hasOverlap(cx, y) {
+    const x1 = cx - halfW, x2 = cx + halfW;
+    for (const r of occupiedRanges(y)) {
+      if (!(x2 < r.left || r.right < x1)) return true;
     }
-    return x1 + halfW;
+    return false;
   }
+  const skippedUpstream = new Set();   // couple-child IDs that fell back to dashed arc
   for (const t of toPlace) {
-    const freeCx = shiftOutOf(t.cx, t.y);
-    const anchorCx = freeCx - (NODE_W + MARRIAGE_GAP) / 2;
-    const satCx = freeCx + (NODE_W + MARRIAGE_GAP) / 2;
+    let cx = t.idealCx;
+    if (hasOverlap(cx, t.y)) {
+      const ranges = occupiedRanges(t.y);
+      let best = null;
+      for (const r of ranges) {
+        for (const cand of [r.left - halfW, r.right + halfW]) {
+          if (!hasOverlap(cand, t.y)) {
+            const dist = Math.abs(cand - t.idealCx);
+            if (best === null || dist < best.dist) best = { cx: cand, dist };
+          }
+        }
+      }
+      // Give up if the shift would be absurd.
+      if (!best || best.dist > COUPLE_W_EFF) {
+        skippedUpstream.add(t.childId);
+        continue;
+      }
+      cx = best.cx;
+    }
+    const anchorCx = cx - (NODE_W + MARRIAGE_GAP) / 2;
+    const satCx = cx + (NODE_W + MARRIAGE_GAP) / 2;
     const anchorNode = makeNode(t.uc.anchorId, Math.round(anchorCx - NODE_W / 2), t.y);
     const satNode = makeNode(t.uc.satId, Math.round(satCx - NODE_W / 2), t.y);
     upstreamNodes.push({ ...t.uc, childId: t.childId, anchorNode, satNode, childNode: t.childNode });
+  }
+  // Reinstate skipped parents so they get rendered via the normal path
+  // (orphan slot + dashed arcs). upstreamCouples / upstreamParentIds already
+  // mutated isAnchor earlier; we undo that selectively here.
+  if (skippedUpstream.size) {
+    for (const childId of skippedUpstream) {
+      const uc = upstreamCouples.get(childId);
+      if (!uc) continue;
+      upstreamCouples.delete(childId);
+      // Add parents back as root anchors so the orphan pass picks them up.
+      isAnchor.add(uc.anchorId);
+      isAnchor.add(uc.satId);
+      upstreamParentIds.delete(uc.anchorId);
+      upstreamParentIds.delete(uc.satId);
+    }
+    // Place reinstated parents via a mini orphan pass.
+    for (const childId of skippedUpstream) {
+      const uc = upstreamCouples.get(childId);  // deleted above, so this is null
+      void uc;
+    }
+    // Second-pass orphan placement for anyone still missing from nodes.
+    for (const p of state.persons) {
+      if (posById.has(p.id)) continue;
+      if (upstreamParentIds.has(p.id)) continue;
+      const g = gen.get(p.id) ?? 0;
+      makeNode(p.id, orphanCursor, marginT + g * ROW_H);
+      orphanCursor += NODE_W + FAMILY_GAP;
+    }
   }
 
   const upstreamSpouseKeys = new Set(upstreamNodes.map(u => u.edgeKey));
