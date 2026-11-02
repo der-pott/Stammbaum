@@ -515,11 +515,11 @@ app.delete('/api/person-images', requireEditor, (req, res) => {
 // Health events are editor-only for viewer too (privacy).
 
 const SUB_RESOURCES = {
-  jobs:              { table: 'jobs',             cols: ['title','employer','start_date','end_date','place','notes'] },
-  residences:        { table: 'residences',       cols: ['place','start_date','end_date','kind','notes'] },
-  military:          { table: 'military_service', cols: ['branch','rank','unit','start_date','end_date','campaigns','notes'] },
-  anecdotes:         { table: 'anecdotes',        cols: ['title','text','source','year'] },
-  'health-events':   { table: 'health_events',    cols: ['condition','date','hereditary','notes'], editorOnlyRead: true },
+  jobs:              { table: 'jobs',             cols: ['title','employer','start_date','end_date','place','notes'], order: 'COALESCE(start_date, created_at)' },
+  residences:        { table: 'residences',       cols: ['place','start_date','end_date','kind','notes'], order: 'COALESCE(start_date, created_at)' },
+  military:          { table: 'military_service', cols: ['branch','rank','unit','start_date','end_date','campaigns','notes'], order: 'COALESCE(start_date, created_at)' },
+  anecdotes:         { table: 'anecdotes',        cols: ['title','text','source','year'], order: 'COALESCE(year, created_at)' },
+  'health-events':   { table: 'health_events',    cols: ['condition','date','hereditary','notes'], editorOnlyRead: true, order: 'COALESCE(date, created_at)' },
 };
 
 function sanitizeSub(cfg, body) {
@@ -538,7 +538,7 @@ function sanitizeSub(cfg, body) {
 for (const [kind, cfg] of Object.entries(SUB_RESOURCES)) {
   const readGuard = cfg.editorOnlyRead ? requireEditor : requireViewer;
   app.get(`/api/persons/:id/${kind}`, readGuard, (req, res) => {
-    const rows = db.prepare(`SELECT * FROM ${cfg.table} WHERE person_id=? ORDER BY start_date, created_at`).all(req.params.id);
+    const rows = db.prepare(`SELECT * FROM ${cfg.table} WHERE person_id=? ORDER BY ${cfg.order || 'created_at'}`).all(req.params.id);
     res.json(rows);
   });
   app.post(`/api/persons/:id/${kind}`, requireEditor, (req, res) => {
