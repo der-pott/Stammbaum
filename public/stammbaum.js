@@ -648,11 +648,13 @@ function computeLayout() {
   // primary is divorced/widowed, status weight wins — a current partner
   // takes the inner slot.
   function statusWeight(status) {
-    // Lower = closer to anchor (= more active).
+    // Lower = closer to anchor (= more active). 'implied' = inferred-from-shared-child,
+    // treated as current/active so the pair sits side-by-side on the right.
     switch (status) {
       case 'married':
       case 'partner':
       case 'engaged':
+      case 'implied':
       case null:
       case undefined:
       case '':
