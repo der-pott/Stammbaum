@@ -16,24 +16,26 @@ const DEFAULT_TIMEOUT = 10_000;
 export function activeBackend() {
   if (process.env.BRAVE_SEARCH_API_KEY) return 'brave';
   if (process.env.SERPER_API_KEY) return 'serper';
+  if (process.env.GOOGLE_CSE_API_KEY && process.env.GOOGLE_CSE_CX) return 'googlecse';
   return null;
 }
 
 export function missingBackendInfo() {
   return {
     error: 'no_backend',
-    message: 'Keine Websuche konfiguriert. Setze BRAVE_SEARCH_API_KEY in /srv/projects/stammbaum/.env.',
-    env_vars: ['BRAVE_SEARCH_API_KEY', 'SERPER_API_KEY'],
+    message: 'Keine Websuche konfiguriert. Setze BRAVE_SEARCH_API_KEY ODER GOOGLE_CSE_API_KEY+GOOGLE_CSE_CX in /srv/projects/stammbaum/.env.',
+    env_vars: ['BRAVE_SEARCH_API_KEY', 'SERPER_API_KEY', 'GOOGLE_CSE_API_KEY'],
     docs: {
-      brave: 'https://brave.com/search/api/ (free, 2000 Queries/Monat)',
+      brave: 'https://brave.com/search/api/ (free Tier mit 2000 Queries/Monat)',
       serper: 'https://serper.dev/ (bezahlt)',
+      googlecse: 'https://programmablesearchengine.google.com/ (100/Tag free)',
     },
   };
 }
 
 // Rate limit: 1 req/s on Brave free tier
-const NEXT_ALLOWED = { brave: 0, serper: 0 };
-const INTERVAL_MS = { brave: 1100, serper: 500 };
+const NEXT_ALLOWED = { brave: 0, serper: 0, googlecse: 0 };
+const INTERVAL_MS = { brave: 1100, serper: 500, googlecse: 400 };
 
 async function waitRateLimit(backend) {
   const now = Date.now();
@@ -77,6 +79,11 @@ export async function webSearch(opts) {
     }
     if (backend === 'serper') {
       const hits = await serperSearch(q, { gl: (opts.country || 'DE').toLowerCase(), limit });
+      logSearch(backend, q, 200, Date.now() - start, null);
+      return { ok: true, backend, hits };
+    }
+    if (backend === 'googlecse') {
+      const hits = await googleCseSearch(q, { gl: (opts.country || 'DE').toLowerCase(), limit });
       logSearch(backend, q, 200, Date.now() - start, null);
       return { ok: true, backend, hits };
     }
@@ -137,6 +144,36 @@ async function serperSearch(q, { gl, limit }) {
     if (!res.ok) throw new Error(`Serper HTTP ${res.status}`);
     const data = await res.json();
     const results = data?.organic || [];
+    return results.map(r => ({
+      title: r.title || '',
+      url: r.link || '',
+      snippet: r.snippet || '',
+    }));
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// Google Custom Search Engine --------------------------------------------
+async function googleCseSearch(q, { gl, limit }) {
+  const key = process.env.GOOGLE_CSE_API_KEY;
+  const cx = process.env.GOOGLE_CSE_CX;
+  const params = new URLSearchParams({ key, cx, q, num: String(Math.min(limit, 10)) });
+  if (gl) params.set('gl', gl);
+  const url = `https://www.googleapis.com/customsearch/v1?${params}`;
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT);
+  try {
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      headers: { 'Accept': 'application/json', 'User-Agent': UA },
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Google CSE HTTP ${res.status} ${body.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    const results = data?.items || [];
     return results.map(r => ({
       title: r.title || '',
       url: r.link || '',
