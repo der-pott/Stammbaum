@@ -2,6 +2,8 @@
 // Ergänzungen (Personen, Edges, Residences, Felder, Widersprüche) als
 // JSON-Vorschläge vor. User reviewt + wendet selektiv an.
 
+import { createHash } from 'node:crypto';
+
 const MODEL = process.env.ANTHROPIC_AI_REVIEW_MODEL || 'claude-opus-4-7';
 
 const SYSTEM_PROMPT = `Du bist Genealogie-Analyst. Du bekommst die vollständigen Daten einer Person plus das Namensregister aller bereits erfassten Personen. Analysiere die Freitext-Felder (notes, anecdote-text, document-captions) und finde:
@@ -54,9 +56,12 @@ Schema:
 
 Erlaubte person-Felder für field_updates: given_name, surname, birth_name, nicknames, gender, birth_date, birth_place, death_date, death_place, notes.
 
-Verwende null für fehlende Felder, nicht leere Strings.`;
+Verwende null für fehlende Felder, nicht leere Strings.
 
-function buildUserPrompt(ctx, register) {
+WICHTIG — DEDUPLIZIERUNG:
+Wenn eine Information bereits in den „bereits verarbeiteten Vorschlägen" steht ODER in den strukturierten Daten (person, parents, spouses, children, siblings, jobs, residences, military, education, anecdotes) der Person bereits reflektiert ist: NICHT erneut vorschlagen. Fokussiere ausschließlich auf NEUE Informationen aus Freitexten die noch nicht strukturiert erfasst sind. Jedes mehrfache Vorschlagen des gleichen Facts ist ein Fehler.`;
+
+function buildUserPrompt(ctx, register, alreadyProcessed = []) {
   const payload = {
     person: ctx.person,
     parents: ctx.parents.map(p => ({ id: p.id, name: nm(p), birth_date: p.birth_date })),
@@ -72,15 +77,104 @@ function buildUserPrompt(ctx, register) {
     documentCaptions: ctx.docCaptions,
     name_register: register,
   };
-  return `Daten der Person und Namensregister:\n\n${JSON.stringify(payload, null, 2)}`;
+  let prompt = `Daten der Person und Namensregister:\n\n${JSON.stringify(payload, null, 2)}`;
+  if (alreadyProcessed.length) {
+    prompt += `\n\nBEREITS VERARBEITETE VORSCHLÄGE (nicht erneut vorschlagen):\n`;
+    for (const row of alreadyProcessed) {
+      prompt += `- [${row.category}] ${row.summary} (${row.status} am ${row.applied_at?.slice(0, 10) || '?'})\n`;
+    }
+  }
+  return prompt;
+}
+
+// Hash des Analyse-Kontextes. Wenn er sich seit dem letzten Review nicht
+// geändert hat, ist ein neuer Claude-Call sinnlos.
+export function hashContext(ctx) {
+  const canonical = JSON.stringify({
+    person: ctx.person,
+    parents_ids: (ctx.parents || []).map(p => p.id).sort(),
+    spouses_ids: (ctx.spouses || []).map(p => p.id).sort(),
+    children_ids: (ctx.children || []).map(p => p.id).sort(),
+    siblings_ids: (ctx.siblings || []).map(p => p.id).sort(),
+    jobs: ctx.jobs,
+    education: ctx.education,
+    residences: ctx.residences,
+    anecdotes: ctx.anecdotes,
+    military: ctx.military,
+    health: ctx.health,
+    docCaptions: ctx.docCaptions,
+  });
+  return createHash('sha1').update(canonical).digest('hex');
+}
+
+// Hash eines einzelnen Vorschlags (kanonische Form, insensitiv gegen case/whitespace).
+// Dient dem Match zwischen verschiedenen Reviews derselben Person.
+function clean(v) {
+  if (typeof v !== 'string') return v ?? null;
+  const s = v.trim().toLowerCase();
+  return s || null;
+}
+export function suggestionHash(category, s) {
+  let core;
+  switch (category) {
+    case 'new_persons':
+      core = { c: category, g: clean(s?.given_name), f: clean(s?.surname), b: clean(s?.birth_name), d: s?.birth_date || null };
+      break;
+    case 'new_edges':
+      core = { c: category, t: s?.type, f: s?.from_person_id || s?.from_hint || null, to: s?.to_person_id || s?.to_hint || null };
+      break;
+    case 'new_residences':
+      core = { c: category, p: clean(s?.place), st: clean(s?.street), ci: clean(s?.city) };
+      break;
+    case 'new_jobs':
+      core = { c: category, t: clean(s?.title), e: clean(s?.employer), sd: s?.start_date || null };
+      break;
+    case 'new_education':
+      core = { c: category, i: clean(s?.institution), f: clean(s?.field), sd: s?.start_date || null };
+      break;
+    case 'new_military':
+      core = { c: category, b: clean(s?.branch), u: clean(s?.unit), sd: s?.start_date || null };
+      break;
+    case 'new_anecdotes':
+      core = { c: category, t: clean(s?.title), tx: clean((s?.text || '').slice(0, 80)) };
+      break;
+    case 'residence_updates':
+    case 'job_updates':
+      core = { c: category, id: s?.entry_id, p: s?.patch || {} };
+      break;
+    case 'field_updates':
+      core = { c: category, f: s?.field, s: s?.suggested };
+      break;
+    default:
+      core = { c: category, raw: s };
+  }
+  return createHash('sha1').update(JSON.stringify(core)).digest('hex');
+}
+
+// Kurze Summary für UI/Prompt-Injection, max ~80 Zeichen.
+export function suggestionSummary(category, s) {
+  const t = (v) => (v || '').toString().slice(0, 60);
+  switch (category) {
+    case 'new_persons':   return `Person ${t(s?.given_name)} ${t(s?.surname)}${s?.birth_name ? ' geb. ' + t(s?.birth_name) : ''}`;
+    case 'new_edges':     return `${s?.type} ${t(s?.from_person_id || s?.from_hint?.given_name || '?')} → ${t(s?.to_person_id || s?.to_hint?.given_name || '?')}`;
+    case 'new_residences':return `Wohnort ${t(s?.city || s?.place)}`;
+    case 'new_jobs':      return `Beruf ${t(s?.title)} bei ${t(s?.employer)}`;
+    case 'new_education': return `Ausbildung ${t(s?.institution)} ${t(s?.field)}`;
+    case 'new_military':  return `Militär ${t(s?.branch)} ${t(s?.unit)}`;
+    case 'new_anecdotes': return `Anekdote ${t(s?.title || s?.text)}`;
+    case 'residence_updates': return `Wohnort-Patch ${t(JSON.stringify(s?.patch))}`;
+    case 'job_updates':   return `Beruf-Patch ${t(JSON.stringify(s?.patch))}`;
+    case 'field_updates': return `${t(s?.field)} → ${t(s?.suggested)}`;
+    default:              return category;
+  }
 }
 
 function nm(p) {
   return [p.given_name, p.surname].filter(Boolean).join(' ') || '(ohne Namen)';
 }
 
-export async function runReview(anthropic, ctx, register) {
-  const userPrompt = buildUserPrompt(ctx, register);
+export async function runReview(anthropic, ctx, register, alreadyProcessed = []) {
+  const userPrompt = buildUserPrompt(ctx, register, alreadyProcessed);
   const resp = await anthropic.messages.create({
     model: MODEL,
     max_tokens: 4096,

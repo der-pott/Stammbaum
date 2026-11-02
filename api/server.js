@@ -10,7 +10,7 @@ import {
 } from './db.js';
 import { createAnthropicClient, runResearch } from './research.js';
 import { generateBiography } from './biography.js';
-import { runReview } from './ai_review.js';
+import { runReview, hashContext, suggestionHash, suggestionSummary } from './ai_review.js';
 import { listSources, runSingleSource, SOURCES } from './research_dispatch.js';
 import { startWorker, enqueueJob, getJob } from './scrape_worker.js';
 import { computeConsensus } from './consensus.js';
@@ -746,20 +746,59 @@ app.post('/api/persons/:id/biography', requireEditor, aiLimiter, async (req, res
 /* AI-Review ------------------------------------------------------------ */
 
 // Analyse: liest Daten + Namensregister, baut Vorschläge, speichert in ai_reviews.
+// Dedup-Logik: wenn Context seit letztem Review unverändert, keinen neuen
+// Claude-Call machen und den letzten Review zurückgeben. Außerdem werden alle
+// bereits applied/skipped suggestions der Person als „bereits verarbeitet"
+// Hinweis dem LLM mitgegeben.
 app.post('/api/persons/:id/ai-review', requireEditor, aiLimiter, async (req, res) => {
   if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY nicht gesetzt' });
   const ctx = gatherBioContext(req.params.id);
   if (!ctx) return res.status(404).json({ error: 'person not found' });
+
+  const ctxHash = hashContext(ctx);
+
+  // Context-Hash-Match: Wenn's einen bestehenden Review (gleicher context_hash,
+  // status != dismissed) gibt, Verwende den vorhandenen → keine neuen tokens.
+  const existing = db.prepare(`SELECT id, suggestions, status, model, created_at
+    FROM ai_reviews
+    WHERE person_id=? AND context_hash=? AND status != 'dismissed'
+    ORDER BY created_at DESC LIMIT 1`).get(req.params.id, ctxHash);
+  if (existing) {
+    let suggestions;
+    try { suggestions = JSON.parse(existing.suggestions); } catch { suggestions = null; }
+    if (suggestions) {
+      logAudit(req.auth.role, 'ai_review.cached', req.params.id);
+      return res.json({
+        review_id: existing.id,
+        person_id: req.params.id,
+        suggestions,
+        model: existing.model,
+        created_at: existing.created_at,
+        cached: true,
+        unchanged: true,
+      });
+    }
+  }
+
   // Namensregister aller anderen Personen für ID-Lookup
   const register = db.prepare(`SELECT id, given_name, surname, birth_name, birth_date
     FROM persons WHERE id != ? ORDER BY surname, given_name`).all(req.params.id);
+
+  // Bereits verarbeitete Vorschläge dieser Person aus allen vergangenen Reviews
+  // (für Prompt-Injection, damit der LLM sie nicht erneut vorschlägt).
+  const processed = db.prepare(`SELECT i.category, i.status, i.summary, i.applied_at
+    FROM ai_review_items i
+    JOIN ai_reviews r ON r.id = i.review_id
+    WHERE r.person_id=? AND i.status IN ('applied','skipped_duplicate')
+    ORDER BY i.applied_at DESC LIMIT 60`).all(req.params.id);
+
   try {
-    const result = await runReview(anthropic, ctx, register);
+    const result = await runReview(anthropic, ctx, register, processed);
     const now = nowIso();
     const reviewId = newId();
-    db.prepare(`INSERT INTO ai_reviews (id, person_id, suggestions, status, model, created_at)
-      VALUES (?,?,?,?,?,?)`)
-      .run(reviewId, req.params.id, JSON.stringify(result.suggestions), 'pending', result.model, now);
+    db.prepare(`INSERT INTO ai_reviews (id, person_id, suggestions, status, model, context_hash, created_at)
+      VALUES (?,?,?,?,?,?,?)`)
+      .run(reviewId, req.params.id, JSON.stringify(result.suggestions), 'pending', result.model, ctxHash, now);
     logAudit(req.auth.role, 'ai_review.generate', req.params.id);
     res.json({ review_id: reviewId, person_id: req.params.id, suggestions: result.suggestions, model: result.model, created_at: now, usage: result.usage });
   } catch (err) {
@@ -770,6 +809,9 @@ app.post('/api/persons/:id/ai-review', requireEditor, aiLimiter, async (req, res
 });
 
 // Apply: wendet selektierte Vorschläge an. Body: { accepted: { new_persons: [idx...], ... } }
+// Dedup: vor jedem INSERT wird gegen DB geprüft ob der Vorschlag bereits
+// vorhanden ist. Treffer → skip + resolved_entity_id merken (für Edge-Hints
+// die auf einen Duplikat-Person zeigen).
 app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
   const row = db.prepare('SELECT * FROM ai_reviews WHERE id=?').get(req.params.review_id);
   if (!row) return res.status(404).json({ error: 'review not found' });
@@ -784,10 +826,24 @@ app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
   const personId = row.person_id;
   const now = nowIso();
   const errors = [];
+  const skipped = [];
   let applied = 0;
 
-  // Map from "new_persons index" → resolved new id (für Edges die auf einen frisch angelegten Vorschlag zeigen)
+  // Map from "new_persons index" → resolved id (sowohl frisch angelegt als auch bei dedup auf existing)
   const newPersonIds = new Map();
+
+  // Hilfs-Insert für ai_review_items. Idempotent via PRIMARY KEY (review_id,category,idx).
+  const insertItem = db.prepare(`INSERT OR REPLACE INTO ai_review_items
+    (review_id, category, idx, suggestion_hash, status, resolved_entity_id, summary, applied_at)
+    VALUES (?,?,?,?,?,?,?,?)`);
+  const recordItem = (category, idx, suggestion, status, resolvedId = null) => {
+    try {
+      insertItem.run(row.id, category, idx, suggestionHash(category, suggestion), status, resolvedId, suggestionSummary(category, suggestion), now);
+    } catch (e) {
+      // non-fatal, continue
+      console.error('ai_review_items write failed:', e.message);
+    }
+  };
 
   const tx = db.transaction(() => {
     // 1) new_persons

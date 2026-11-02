@@ -1056,7 +1056,8 @@ function computeLayout() {
     nodes, links, posById,
     slotByAnchor, slotPos, childSlotsOfAnchor, satelliteOf, spouseEdges,
     forcedSatelliteOf, parentOf, primaryPartnerOf,
-    upstreamNodes, upstreamSpouseKeys, upstreamParentEdgeKeys,
+    upstreamNodes, upstreamSpouseKeys, upstreamParentEdgeKeys, upstreamCouples,
+    _debug: { upstreamCouplesSize: upstreamCouples.size, upstreamParentIds: [...upstreamParentIds] },
     totalW, totalH,
     marginL, marginT,
   };

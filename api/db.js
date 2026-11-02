@@ -204,16 +204,41 @@ db.exec(`
   );
 
   CREATE TABLE IF NOT EXISTS ai_reviews (
-    id          TEXT PRIMARY KEY,
-    person_id   TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
-    suggestions TEXT NOT NULL,
-    status      TEXT NOT NULL CHECK (status IN ('pending','partially_applied','done','dismissed')),
-    model       TEXT,
-    created_at  TEXT NOT NULL,
-    applied_at  TEXT
+    id           TEXT PRIMARY KEY,
+    person_id    TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    suggestions  TEXT NOT NULL,
+    status       TEXT NOT NULL CHECK (status IN ('pending','partially_applied','done','dismissed')),
+    model        TEXT,
+    context_hash TEXT,
+    created_at   TEXT NOT NULL,
+    applied_at   TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_reviews_person ON ai_reviews(person_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_reviews_ctxhash ON ai_reviews(person_id, context_hash);
+
+  -- Pro-Vorschlag-State: tracked welche suggestions aus welchem review schon
+  -- angewandt oder als duplicate geskippt wurden. Dedup zwischen Reviews.
+  CREATE TABLE IF NOT EXISTS ai_review_items (
+    review_id          TEXT NOT NULL REFERENCES ai_reviews(id) ON DELETE CASCADE,
+    category           TEXT NOT NULL,
+    idx                INTEGER NOT NULL,
+    suggestion_hash    TEXT NOT NULL,
+    status             TEXT NOT NULL CHECK (status IN ('applied','skipped_duplicate','dismissed','failed')),
+    resolved_entity_id TEXT,
+    summary            TEXT,
+    applied_at         TEXT NOT NULL,
+    PRIMARY KEY (review_id, category, idx)
+  );
+  CREATE INDEX IF NOT EXISTS idx_review_items_hash ON ai_review_items(suggestion_hash);
+  CREATE INDEX IF NOT EXISTS idx_review_items_review ON ai_review_items(review_id);
 `);
+
+// ai_reviews: context_hash + 'context_unchanged' status (idempotent migration).
+const reviewCols = new Set(db.prepare('PRAGMA table_info(ai_reviews)').all().map(c => c.name));
+if (!reviewCols.has('context_hash')) {
+  db.exec('ALTER TABLE ai_reviews ADD COLUMN context_hash TEXT');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_reviews_ctxhash ON ai_reviews(person_id, context_hash)');
+}
 
 // Idempotente Migration: Spalte in bestehender Tabelle anlegen falls fehlt.
 // SQLite kennt kein ADD COLUMN IF NOT EXISTS; wir prüfen via PRAGMA.
