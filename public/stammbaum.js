@@ -671,6 +671,18 @@ function computeLayout() {
         }
       }
     }
+    // Pull PARENTS up when a child's gen has grown (via spouse-alignment)
+    // so that parent.gen stays at child.gen - 1. Without this, a child
+    // whose spouse is deeper in another line gets pushed down two rows
+    // from its parents → parent-edges render as cross-tree remote arcs
+    // instead of inline T-drops. All family lines rendered equally.
+    for (const p of state.persons) {
+      const cg = gen.get(p.id);
+      if (cg == null) continue;
+      const pars = parentOf.get(p.id);
+      if (!pars.length) continue;
+      for (const pid of pars) bump(pid, cg - 1);
+    }
   }
   for (const p of state.persons) if (!gen.has(p.id)) gen.set(p.id, 0);
 
