@@ -25,3 +25,20 @@ Wenn mehrere Personen auf einem Bild stehen (Hochzeits-/Familienfoto), für jede
 ## Quellen in `notes`
 
 Jede Person bekommt in `notes` eine kurze Quellenangabe: Standesamt + Nummer + Jahr, Trauerinnerung-Verlag, Kirchenbuch, Trauzeugen etc. So kann man später zurückverfolgen, woher ein Datum stammt.
+
+## Dokumente ausschlachten (immer)
+
+Jedes hochgeladene Dokument (Urkunde, Ausweis, Reisepass, Meldekarte, Zeugnis, Schulzeugnis, Militärpass, Trauerinnerung, Brief, Foto mit Metadaten) wird **vollständig analysiert** und die extrahierten Fakten als strukturierte Dossier-Einträge hinzugefügt — nicht nur im `notes`-Feld.
+
+Zu prüfen und pro Treffer ein eigener Eintrag in die passende Sub-Ressource:
+
+- **Adressen / Wohnorte** (Straße, Hausnummer, Stadt, Land, Zeitraum falls bekannt) → `POST /api/persons/:id/residences`. `kind` nutzen für Kontext: `Geburtsort`, `Kindheit/Jugend`, `Studienort`, `Elternhaus`, `Wehrdienst`, `Alterswohnsitz`, etc. In `notes` die Quelle (welches Dokument + welche Nummer belegt es).
+- **Beruf / Ausbildung** (Lehrstelle, Studium, Arbeitgeber, Dienstgrad bei Militär, Beamtentitel) → `POST /api/persons/:id/jobs` oder `/education` oder `/military`.
+- **Lebensdaten** die noch nicht in der Person-Row stehen (Geburt, Tod, Taufe, Heirat) → `PATCH /api/persons/:id`.
+- **Beziehungen** die neu auftauchen (Zeugen, Trauzeugen, Paten, erwähnte Verwandte) → als neue Personen anlegen und mit Edges (parent/spouse/godparent) verknüpfen, sofern der Beleg eindeutig ist. Sonst in `notes` als Hypothese dokumentieren.
+- **Ausweis-/Dokumentennummern** (Reisepassnummer, Personalausweisnummer, Standesamt-Registernummer, Melderegister-Nr., Kennbuchstaben) → in `notes` der Person oder des Dokument-Eintrags festhalten. Niemals wegwerfen.
+- **Historische Hinweise** (Besatzungszone, politische Lage, Flucht/Vertreibung, Kriegseinsatz) → als `anecdotes`-Eintrag mit `source` = Dokument.
+
+Format der `notes` bei strukturierten Einträgen: eine Zeile pro Fakt mit Quellen-Hinweis in Klammern, z. B. `"Belegt durch Personalausweis Britische Zone, A Nr. 175672, Kennbuchstaben EHD"`.
+
+Immer in der Antwort an den User **auflisten**, welche strukturierten Einträge aus einem Dokument hinzugefügt wurden — nicht nur „habe das Bild verknüpft".
