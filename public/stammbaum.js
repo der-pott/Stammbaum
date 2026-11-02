@@ -118,7 +118,53 @@ const state = {
   dragging: null,
   layout: null,
   latestRunCache: new Map(),
+  focusLineage: localStorage.getItem('sb-focus-lineage') === '1',
 };
+
+// Compute set of person IDs in the lineage of a focus person:
+// ancestors (recursive parents), descendants (recursive children),
+// and the direct partners of persons in that path. Returns Set<string>.
+function lineageIdsOf(focusId) {
+  const result = new Set();
+  if (!focusId) return result;
+  const parentsOf = new Map();   // id -> [parentIds]
+  const childrenOf = new Map();  // id -> [childIds]
+  const spousesOf = new Map();   // id -> [spouseIds]
+  for (const p of state.persons) { parentsOf.set(p.id, []); childrenOf.set(p.id, []); spousesOf.set(p.id, []); }
+  for (const e of state.edges) {
+    if (e.type === 'parent') {
+      childrenOf.get(e.from_id)?.push(e.to_id);
+      parentsOf.get(e.to_id)?.push(e.from_id);
+    } else if (e.type === 'spouse') {
+      spousesOf.get(e.from_id)?.push(e.to_id);
+      spousesOf.get(e.to_id)?.push(e.from_id);
+    }
+  }
+  // BFS ancestors
+  const upQ = [focusId];
+  while (upQ.length) {
+    const id = upQ.shift();
+    if (result.has(id)) continue;
+    result.add(id);
+    for (const p of (parentsOf.get(id) || [])) upQ.push(p);
+  }
+  // BFS descendants
+  const downQ = [focusId];
+  const seenDown = new Set();
+  while (downQ.length) {
+    const id = downQ.shift();
+    if (seenDown.has(id)) continue;
+    seenDown.add(id);
+    result.add(id);
+    for (const c of (childrenOf.get(id) || [])) downQ.push(c);
+  }
+  // Add direct partners of every lineage member
+  const lineageSoFar = [...result];
+  for (const id of lineageSoFar) {
+    for (const s of (spousesOf.get(id) || [])) result.add(s);
+  }
+  return result;
+}
 
 /* --- URL routing ---------------------------------------------------- */
 function parseHash() {
@@ -1283,6 +1329,16 @@ function renderTree() {
 
   const { nodes, links, posById, totalW, totalH, marginT, spouseEdges, overlaps } = state.layout;
 
+  // Focus Lineage Mode: compute set of in-focus ids once per render.
+  const focusActive = state.focusLineage && state.selected;
+  const lineageSet = focusActive ? lineageIdsOf(state.selected) : null;
+
+  // Toggle class on canvas for CSS dim fallback
+  const canvasEl = document.getElementById('tree-canvas');
+  if (canvasEl) {
+    canvasEl.classList.toggle('focus-mode', !!focusActive);
+  }
+
   // Surface collision count in the tree chrome so regressions are visible
   // without opening the console.
   const warnEl = document.getElementById('layout-warn');
@@ -1636,6 +1692,7 @@ function renderTree() {
     g.setAttribute('class', 'node ' + (n.person.gender || ''));
     g.setAttribute('transform', `translate(${n.x} ${n.y})`);
     if (state.selected === n.id) g.classList.add('selected');
+    if (focusActive && !lineageSet.has(n.id)) g.classList.add('dimmed');
 
     // Avatar background circle (acts as frame + fallback bg)
     const bgCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
@@ -1809,6 +1866,16 @@ function setupPanZoom() {
   document.getElementById('btn-zoom-in').onclick = () => zoomBy(1.3);
   document.getElementById('btn-zoom-out').onclick = () => zoomBy(1 / 1.3);
   document.getElementById('btn-zoom-fit').onclick = () => fitTree({ all: true });
+  const focusBtn = document.getElementById('btn-focus-lineage');
+  if (focusBtn) {
+    if (state.focusLineage) focusBtn.classList.add('active');
+    focusBtn.onclick = () => {
+      state.focusLineage = !state.focusLineage;
+      localStorage.setItem('sb-focus-lineage', state.focusLineage ? '1' : '0');
+      focusBtn.classList.toggle('active', state.focusLineage);
+      renderTree();
+    };
+  }
 }
 function zoomBy(f) {
   const canvas = document.getElementById('tree-canvas');

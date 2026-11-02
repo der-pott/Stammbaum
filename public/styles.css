@@ -1492,3 +1492,13 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
 @media (max-width: 820px) {
   .dlg-ai-review { max-height: 95vh; }
 }
+
+/* ---- Focus Lineage Mode ----------------------------------------------- */
+.tree-canvas.focus-mode .node.dimmed { opacity: 0.18; transition: opacity 0.25s ease; }
+.tree-canvas.focus-mode .edges { opacity: 0.35; transition: opacity 0.25s ease; }
+.tree-canvas.focus-mode .node:not(.dimmed) { opacity: 1; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.08)); }
+#btn-focus-lineage.active {
+  background: var(--seal);
+  color: var(--seal-ink);
+}
+#btn-focus-lineage.active:hover { background: var(--seal); }
