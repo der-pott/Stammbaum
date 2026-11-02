@@ -9,7 +9,7 @@
 
 import { db, nowIso } from './db.js';
 
-const UA = 'Stammbaum-Pott/1.0 (private family research; contact: maximilian.pott@outlook.com)';
+const UA = 'Stammbaum/1.0 (private family research; contact: maximilian.pott@outlook.com)';
 const DEFAULT_TIMEOUT = 10_000;
 
 // Backend selection ------------------------------------------------------

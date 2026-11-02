@@ -1,5 +1,5 @@
 // Background worker — drains research_jobs queue.
-// One in-process setInterval, 2s cadence. Suitable for Pott-scale volume.
+// One in-process setInterval, 2s cadence. Suitable for private-archive volume.
 
 import { db, newId, nowIso } from './db.js';
 import { dispatchResearch, SOURCES } from './research_dispatch.js';

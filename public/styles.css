@@ -305,13 +305,15 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
   stroke-width: 1.2;
   stroke-linecap: round;
 }
-/* Fallback curve for parent edges not covered by a unit */
+/* Fallback curve for parent edges not covered by a unit — solid, nur
+ * leicht ausgedünnt zur Entzerrung dichter Cross-Line Verbindungen.
+ * Keine gestrichelte Darstellung mehr: alle echten Elternschaften
+ * werden gleichwertig gerendert. */
 .edge-parent-remote {
   fill: none;
   stroke: var(--line-strong);
   stroke-width: 1;
-  stroke-dasharray: 4 4;
-  opacity: 0.5;
+  opacity: 0.7;
 }
 /* Horizontal spouse line */
 .edge-spouse {
@@ -319,12 +321,15 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
   stroke-width: 1.3;
   opacity: 0.85;
 }
+/* Cross-tree Ehe-Bogen zwischen zwei eigenständigen Anchors.
+ * Solid wie Inline-Ehe — nur minimal reduzierte Opazität zur Entzerrung
+ * dichter Darstellungen. Keine Strichelung mehr: alle echten Ehen sind
+ * gleichwertig, egal welche Sippe. */
 .edge-spouse-remote {
   fill: none;
   stroke: var(--seal);
   stroke-width: 1.2;
-  stroke-dasharray: 3 3;
-  opacity: 0.6;
+  opacity: 0.75;
 }
 .edge-heart,
 .edge-glyph {

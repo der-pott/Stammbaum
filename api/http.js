@@ -2,7 +2,7 @@
 
 import { db, nowIso } from './db.js';
 
-const UA = 'Stammbaum-Pott/1.0 (private family research; contact: maximilian.pott@outlook.com)';
+const UA = 'Stammbaum/1.0 (private family research; contact: maximilian.pott@outlook.com)';
 const DOMAIN_INTERVAL_MS = 1500;
 const DEFAULT_TIMEOUT = 15_000;
 
