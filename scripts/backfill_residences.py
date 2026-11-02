@@ -227,23 +227,26 @@ class Api:
         self.cj = http.cookiejar.CookieJar()
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cj))
 
+    UA = 'Stammbaum-Backfill/1.0 (python-urllib)'
+
     def login(self):
         req = urllib.request.Request(
             f'{API}/api/auth/login',
             data=json.dumps({'role': 'editor', 'pin': '060481'}).encode(),
-            headers={'content-type': 'application/json'},
+            headers={'content-type': 'application/json', 'user-agent': self.UA, 'accept': 'application/json'},
             method='POST',
         )
         self.opener.open(req).read()
 
     def get(self, path):
-        return json.loads(self.opener.open(f'{API}{path}').read())
+        req = urllib.request.Request(f'{API}{path}', headers={'user-agent': self.UA, 'accept': 'application/json'})
+        return json.loads(self.opener.open(req).read())
 
     def patch(self, path, body):
         req = urllib.request.Request(
             f'{API}{path}',
             data=json.dumps(body).encode(),
-            headers={'content-type': 'application/json'},
+            headers={'content-type': 'application/json', 'user-agent': self.UA, 'accept': 'application/json'},
             method='PATCH',
         )
         return json.loads(self.opener.open(req).read())
