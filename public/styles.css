@@ -419,6 +419,13 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
   text-transform: uppercase;
   dominant-baseline: central;
 }
+.node-geb {
+  font-family: var(--font-text);
+  font-size: 10.5px;
+  font-style: italic;
+  fill: var(--ink-faint);
+  dominant-baseline: central;
+}
 .node.selected .node-name { fill: var(--seal); }
 
 .tree-hover {

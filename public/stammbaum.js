@@ -504,23 +504,92 @@ function computeLayout() {
   const MARRIAGE_GAP = 56;   // anchor <-> satellite gap (same as COUPLE_GAP)
   const SATELLITE_GAP = 44;  // satellite <-> satellite gap
 
-  // isAnchorOf: who gets their own slot. Everyone with parents is an anchor.
+  function childrenShared(a, b) {
+    const ca = new Set(childOf.get(a) || []);
+    const cb = childOf.get(b) || [];
+    let n = 0;
+    for (const c of cb) if (ca.has(c)) n++;
+    return n;
+  }
+  function sharedChildrenList(a, b) {
+    const ca = new Set(childOf.get(a) || []);
+    return (childOf.get(b) || []).filter(c => ca.has(c));
+  }
+
+  // --- MARITAL ANCHOR vs BIRTH ANCHOR ---------------------------------
+  // Rule: when two persons are married/partnered AND share ≥1 child, that
+  // marital couple takes precedence over either spouse's birth family. One
+  // of the pair is drawn as the slot anchor; the other as its primary
+  // satellite — even if the primary satellite has their own parents in the
+  // DB. The satellite's birth parents become a dashed birth-arc.
+
+  // Primary partner (per person) = spouse with earliest shared-child birth-year.
+  const earliestKidYearFor = (kids) => {
+    let min = Infinity;
+    for (const k of kids) {
+      const y = parseInt(year(personById.get(k)?.birth_date) || '', 10);
+      if (!isNaN(y) && y < min) min = y;
+    }
+    return min;
+  };
+  const primaryPartnerOf = new Map();
+  for (const p of state.persons) {
+    const list = [];
+    for (const q of (spouseOf.get(p.id) || [])) {
+      const kids = sharedChildrenList(p.id, q);
+      if (kids.length) list.push({ q, min: earliestKidYearFor(kids) });
+    }
+    if (list.length) {
+      list.sort((a, b) => a.min - b.min);
+      primaryPartnerOf.set(p.id, list[0].q);
+    }
+  }
+
+  // Mutual primary couples (both prefer each other).
+  const pickCoupleAnchor = (a, b) => {
+    const pa = personById.get(a), pb = personById.get(b);
+    const gA = pa?.gender, gB = pb?.gender;
+    if (gA === 'm' && gB !== 'm') return a;
+    if (gB === 'm' && gA !== 'm') return b;
+    const yA = year(pa?.birth_date), yB = year(pb?.birth_date);
+    if (yA && yB && yA !== yB) return yA.localeCompare(yB) < 0 ? a : b;
+    return a < b ? a : b;
+  };
+  const forcedSatelliteOf = new Map();  // satId -> anchorId  (overrides birth-anchor rule)
+  const seenCouple = new Set();
+  for (const [p, other] of primaryPartnerOf) {
+    if (primaryPartnerOf.get(other) !== p) continue;
+    const key = p < other ? `${p}|${other}` : `${other}|${p}`;
+    if (seenCouple.has(key)) continue;
+    seenCouple.add(key);
+    const anchor = pickCoupleAnchor(p, other);
+    const sat = anchor === p ? other : p;
+    forcedSatelliteOf.set(sat, anchor);
+  }
+
+  // isAnchor: persons who get their own slot.
+  // A person with parents is their own anchor UNLESS a mutual primary couple
+  // has designated them the satellite side (then they ride in the anchor's slot
+  // and their birth parents become a dashed birth-arc).
   const isAnchor = new Set();
   for (const p of state.persons) {
+    if (forcedSatelliteOf.has(p.id)) continue;
     if ((parentOf.get(p.id) || []).length > 0) isAnchor.add(p.id);
   }
 
-  // satelliteOf: for persons without parents, if they're married to an anchor,
-  // they become that anchor's satellite. Pick the anchor with the most-recent
-  // "primary" relationship.
+  // satelliteOf: persons who sit next to an anchor in that anchor's slot.
   const satelliteOf = new Map();   // satelliteId -> anchorId
+  // (a) forced sats from mutual primary couples.
+  for (const [sat, anchor] of forcedSatelliteOf) {
+    satelliteOf.set(sat, anchor);
+  }
+  // (b) parent-less persons married to an anchor become its satellite.
   for (const p of state.persons) {
     if (isAnchor.has(p.id)) continue;
+    if (satelliteOf.has(p.id)) continue;
     const partners = [...(spouseOf.get(p.id) || [])];
     const anchorPartners = partners.filter(x => isAnchor.has(x));
     if (anchorPartners.length) {
-      // Pick first anchor as owner. If multiple, the one with most children
-      // via this edge wins; else first by id for stability.
       anchorPartners.sort((a, b) => {
         const ca = childrenShared(a, p.id);
         const cb = childrenShared(b, p.id);
@@ -529,13 +598,6 @@ function computeLayout() {
       });
       satelliteOf.set(p.id, anchorPartners[0]);
     }
-  }
-  function childrenShared(a, b) {
-    const ca = new Set(childOf.get(a) || []);
-    const cb = childOf.get(b) || [];
-    let n = 0;
-    for (const c of cb) if (ca.has(c)) n++;
-    return n;
   }
 
   // Persons without parents who were NOT taken as satellites are their own anchors.
@@ -550,8 +612,13 @@ function computeLayout() {
   for (const a of isAnchor) {
     const sats = [];
     for (const [sid, aid] of satelliteOf) if (aid === a) sats.push(sid);
-    // Order satellites: by edge.since, then by satellite birth-year.
+    // Order: primary partner (mutual-couple forced sat) first, then by
+    // edge.since, then by birth-year. Primary partner first keeps the
+    // couple-link clean and places the shared-children drop under the pair.
+    const primary = primaryPartnerOf.get(a);
     sats.sort((x, y) => {
+      if (x === primary && y !== primary) return -1;
+      if (y === primary && x !== primary) return 1;
       const kx = a < x ? `${a}|${x}` : `${x}|${a}`;
       const ky = a < y ? `${a}|${y}` : `${y}|${a}`;
       const sx = spouseEdges.get(kx)?.since || '';
@@ -803,6 +870,7 @@ function computeLayout() {
   return {
     nodes, links, posById,
     slotByAnchor, slotPos, childSlotsOfAnchor, satelliteOf, spouseEdges,
+    forcedSatelliteOf, parentOf, primaryPartnerOf,
     totalW, totalH,
     marginL, marginT,
   };
@@ -1142,14 +1210,33 @@ function renderTree() {
 
     // Dates — positioned below the wrapped name block.
     const dates = fmtLifeShort(n.person);
+    let belowY = AVATAR_R * 2 + 18 + nameLines.length * NAME_LINE_H + 2;
     if (dates) {
-      const dy = AVATAR_R * 2 + 18 + nameLines.length * NAME_LINE_H + 2;
-      const dT = textEl(NODE_W / 2, dy, dates, { anchor: 'middle', cls: 'node-dates' });
+      const dT = textEl(NODE_W / 2, belowY, dates, { anchor: 'middle', cls: 'node-dates' });
       g.appendChild(dT);
+      belowY += 14;
     }
 
-    // Role micro-label (daughter/son/father ...) — only if parents exist
-    // Skip for now; can add later per-generation chip.
+    // "geb. <Surname>" label when this person is a forced-satellite with
+    // birth parents in another sub-tree (classic Genealogie convention).
+    const forcedSatMap = state.layout?.forcedSatelliteOf;
+    if (forcedSatMap?.has(n.id)) {
+      const parEdges = state.edges.filter(e => e.type === 'parent' && e.to_id === n.id);
+      const birthSurname = (() => {
+        if (n.person.birth_name && n.person.birth_name !== n.person.surname) return n.person.birth_name;
+        for (const e of parEdges) {
+          const par = state.persons.find(x => x.id === e.from_id);
+          const s = par?.surname;
+          if (s && s !== n.person.surname) return s;
+        }
+        return null;
+      })();
+      if (parEdges.length) {
+        const text = birthSurname ? `geb. ${birthSurname}` : 'geb.';
+        const gebT = textEl(NODE_W / 2, belowY, text, { anchor: 'middle', cls: 'node-geb' });
+        g.appendChild(gebT);
+      }
+    }
 
     g.onclick = () => select(n.id);
     if (window.matchMedia('(hover: hover)').matches) {
