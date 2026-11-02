@@ -646,6 +646,52 @@ function computeLayout() {
     isAnchor.add(p.id);
   }
 
+  // --- UPSTREAM COUPLES ------------------------------------------------
+  // Detect self-contained parent-couples that should sit DIRECTLY ABOVE their
+  // only child instead of being drawn as separate root anchors with
+  // cross-tree dashed arcs. Conditions for a couple (A, B) of a child C:
+  //   - Both A and B have no own parents in the DB
+  //   - A and B have a spouse-edge between them
+  //   - A and B share C AND have no other children
+  //   - C exists in the layout (is anchor or satellite)
+  // These couples are removed from the normal anchor placement; after all
+  // normal slots are laid out, they are positioned directly above C with
+  // solid spouse ❤ and solid T-drop to C.
+  const upstreamCouples = new Map();   // childId -> {anchorId, satId, edgeKey}
+  const upstreamParentIds = new Set(); // ids of persons that are parents in an upstream couple
+  for (const p of state.persons) {
+    if (upstreamParentIds.has(p.id)) continue;
+    const kids = childOf.get(p.id) || [];
+    if (kids.length !== 1) continue;
+    const childId = kids[0];
+    const childPars = parentOf.get(childId) || [];
+    if (childPars.length !== 2) continue;
+    const [a, b] = childPars;
+    if (a !== p.id && b !== p.id) continue;
+    const other = a === p.id ? b : a;
+    if (upstreamParentIds.has(other)) continue;
+    // Both parents must have no own parents.
+    if ((parentOf.get(a) || []).length > 0) continue;
+    if ((parentOf.get(b) || []).length > 0) continue;
+    // Both must share spouse-edge.
+    const spKey = a < b ? `${a}|${b}` : `${b}|${a}`;
+    if (!spouseEdges.has(spKey)) continue;
+    // Both must have only this child.
+    if ((childOf.get(a) || []).some(c => c !== childId)) continue;
+    if ((childOf.get(b) || []).some(c => c !== childId)) continue;
+    // Pick anchor by same rule as mutual-primary couples.
+    const anchorId = pickCoupleAnchor(a, b);
+    const satId = anchorId === a ? b : a;
+    upstreamCouples.set(childId, { anchorId, satId, edgeKey: spKey });
+    upstreamParentIds.add(a);
+    upstreamParentIds.add(b);
+    // Remove from normal anchor set so they don't take root space.
+    isAnchor.delete(a);
+    isAnchor.delete(b);
+    satelliteOf.delete(a);
+    satelliteOf.delete(b);
+  }
+
   // Build slots keyed by anchor.
   //
   // Satellite order: current/active relationships CLOSEST to anchor, ended
@@ -955,13 +1001,62 @@ function computeLayout() {
     pos.slotLeftX += shift;
   }
 
-  const totalW = (maxX + shift) + marginR;
-  const totalH = maxY + marginB;
+  // --- UPSTREAM COUPLE PLACEMENT --------------------------------------
+  // Position upstream parent-couples directly above their child (anchor on
+  // left of ❤, satellite on right). y = child.y - ROW_H.
+  const upstreamNodes = [];           // {anchorId, satId, childNode, pA, pB}
+  for (const [childId, uc] of upstreamCouples) {
+    const childNode = posById.get(childId);
+    if (!childNode) continue;
+    const anchorPerson = personById.get(uc.anchorId);
+    const satPerson = personById.get(uc.satId);
+    if (!anchorPerson || !satPerson) continue;
+    const cx = childNode.cx;
+    const y = childNode.y - ROW_H;
+    // Center the couple on child's cx. Anchor goes left of ❤, sat right.
+    const anchorCx = cx - (NODE_W + MARRIAGE_GAP) / 2;
+    const satCx = cx + (NODE_W + MARRIAGE_GAP) / 2;
+    const anchorNode = makeNode(uc.anchorId, Math.round(anchorCx - NODE_W / 2), y);
+    const satNode = makeNode(uc.satId, Math.round(satCx - NODE_W / 2), y);
+    upstreamNodes.push({ ...uc, childId, anchorNode, satNode, childNode });
+  }
+
+  const upstreamSpouseKeys = new Set(upstreamNodes.map(u => u.edgeKey));
+  const upstreamParentEdgeKeys = new Set();
+  for (const u of upstreamNodes) {
+    upstreamParentEdgeKeys.add(`${u.anchorId}|${u.childId}`);
+    upstreamParentEdgeKeys.add(`${u.satId}|${u.childId}`);
+  }
+
+  // --- bounds + normalize ---------------------------------------------
+  // (re-run after upstream couples added nodes above the normal top row)
+  const allX = nodes.map(n => n.x);
+  const allY = nodes.map(n => n.y);
+  const minX2 = Math.min(...allX);
+  const minY2 = Math.min(...allY);
+  const maxX2 = Math.max(...nodes.map(n => n.x + n.w));
+  const maxY2 = Math.max(...nodes.map(n => n.y + n.h));
+  // Shift up if upstream couples are above marginT
+  const topShift = (minY2 < marginT) ? (marginT - minY2) : 0;
+  if (topShift > 0) {
+    for (const n of nodes) {
+      n.y += topShift;
+      n.cy += topShift;
+    }
+    for (const [, pos] of slotPos) {
+      pos.y += topShift;
+    }
+  }
+  const finalMaxY = Math.max(...nodes.map(n => n.y + n.h));
+
+  const totalW = maxX2 + marginR;
+  const totalH = finalMaxY + marginB;
 
   return {
     nodes, links, posById,
     slotByAnchor, slotPos, childSlotsOfAnchor, satelliteOf, spouseEdges,
     forcedSatelliteOf, parentOf, primaryPartnerOf,
+    upstreamNodes, upstreamSpouseKeys, upstreamParentEdgeKeys,
     totalW, totalH,
     marginL, marginT,
   };
@@ -1145,10 +1240,12 @@ function renderTree() {
 
   // Draw spouse edges that are NOT in any slot (cross-tree ties between two
   // anchors) — fallback dashed arc.
+  const upstreamSpouseKeys = state.layout?.upstreamSpouseKeys || new Set();
   for (const e of state.edges) {
     if (e.type !== 'spouse') continue;
     const key = e.from_id < e.to_id ? `${e.from_id}|${e.to_id}` : `${e.to_id}|${e.from_id}`;
     if (drawnCouples.has(key)) continue;
+    if (upstreamSpouseKeys.has(key)) continue;  // drawn by upstream-couple logic
     const na = posById.get(e.from_id), nb = posById.get(e.to_id);
     if (!na || !nb) continue;
     const status = e.status || 'married';
@@ -1248,10 +1345,12 @@ function renderTree() {
     }
   }
   // Group remote parent-edges per child.
+  const upstreamParentEdgeKeys = state.layout?.upstreamParentEdgeKeys || new Set();
   const remoteByChild = new Map();  // childId → [parentId]
   for (const e of state.edges) {
     if (e.type !== 'parent') continue;
     if (drawnParent.has(`${e.from_id}|${e.to_id}`)) continue;
+    if (upstreamParentEdgeKeys.has(`${e.from_id}|${e.to_id}`)) continue;  // drawn by upstream-couple logic
     const na = posById.get(e.from_id), nb = posById.get(e.to_id);
     if (!na || !nb) continue;
     if (!remoteByChild.has(e.to_id)) remoteByChild.set(e.to_id, []);
@@ -1292,6 +1391,45 @@ function renderTree() {
       if (!na) continue;
       drawRemoteArc(na.cx, na.y + AVATAR_R * 2, nb);
     }
+  }
+
+  // Upstream couples: solid spouse ribbon between the two parents + solid T-drop
+  // to the child. These replace what would otherwise be a dashed cross-tree arc.
+  const upstreamNodes = state.layout?.upstreamNodes || [];
+  for (const u of upstreamNodes) {
+    const anchorNode = u.anchorNode, satNode = u.satNode, childNode = u.childNode;
+    if (!anchorNode || !satNode || !childNode) continue;
+    const spEdge = spouseEdges.get(u.edgeKey);
+    const status = spEdge?.status || 'married';
+    const glyph = marriageGlyph(status);
+
+    // Spouse line between the two parents.
+    const lineY = anchorNode.y + AVATAR_R;
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    line.setAttribute('d', `M${anchorNode.cx},${lineY} H${satNode.cx}`);
+    line.setAttribute('class', `edge-spouse status-${status}`);
+    edgeG.appendChild(line);
+    const mx = (anchorNode.cx + satNode.cx) / 2;
+    if (status === 'divorced') {
+      drawDivorceSlashes(edgeG, mx, lineY, 0);
+    } else if (glyph.symbol) {
+      const sym = textEl(mx, lineY, glyph.symbol, { anchor: 'middle', cls: glyph.cls });
+      edgeG.appendChild(sym);
+    }
+    if (glyph.label) {
+      const lbl = textEl(mx, lineY + 20, glyph.label, { anchor: 'middle', cls: `edge-label status-${status}` });
+      edgeG.appendChild(lbl);
+    }
+
+    // Solid T-drop from midpoint down to child.
+    const parentY = anchorNode.y + AVATAR_R * 2;
+    const childTopY = childNode.y;
+    const barY = Math.round((parentY + 18 + childTopY - 18) / 2);
+    const drop = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    drop.setAttribute('d', `M${Math.round(mx)},${parentY + 2} V${barY} H${Math.round(childNode.cx)} V${childTopY - 2}`);
+    drop.setAttribute('class', 'edge-parent');
+    drop.setAttribute('fill', 'none');
+    edgeG.appendChild(drop);
   }
 
   root.appendChild(edgeG);
