@@ -846,10 +846,26 @@ app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
   };
 
   const tx = db.transaction(() => {
-    // 1) new_persons
+    // 1) new_persons mit Dedup via (given_name, surname, optional birth_date)
     for (const idx of (accepted.new_persons || [])) {
       const p = suggestions.new_persons?.[idx];
-      if (!p || !p.given_name || !p.surname) { errors.push({ bucket: 'new_persons', idx, error: 'invalid vorschlag' }); continue; }
+      if (!p || !p.given_name || !p.surname) {
+        errors.push({ bucket: 'new_persons', idx, error: 'invalid vorschlag' });
+        continue;
+      }
+      // Dedup: gleicher Name (case-insensitive); wenn beide birth_date haben, müssen sie matchen
+      const existing = db.prepare(`
+        SELECT id FROM persons
+        WHERE LOWER(TRIM(given_name))=LOWER(TRIM(?))
+          AND LOWER(TRIM(surname))=LOWER(TRIM(?))
+          AND (? IS NULL OR birth_date IS NULL OR birth_date=?)
+        LIMIT 1`).get(p.given_name, p.surname, p.birth_date || null, p.birth_date || null);
+      if (existing) {
+        newPersonIds.set(idx, existing.id);
+        skipped.push({ bucket: 'new_persons', idx, reason: 'duplicate', existing_id: existing.id });
+        recordItem('new_persons', idx, p, 'skipped_duplicate', existing.id);
+        continue;
+      }
       const id = newId();
       try {
         db.prepare(`INSERT INTO persons (id, given_name, surname, birth_name, nicknames, gender, birth_date, birth_place, death_date, death_place, notes, created_at, updated_at)
@@ -858,17 +874,22 @@ app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
                p.birth_date || null, p.birth_place || null, p.death_date || null, p.death_place || null,
                p.notes || null, now, now);
         newPersonIds.set(idx, id);
+        recordItem('new_persons', idx, p, 'applied', id);
         logAudit(req.auth.role, 'ai_review.apply.person', `${row.id} new=${id}`);
         applied++;
       } catch (e) {
         errors.push({ bucket: 'new_persons', idx, error: e.message });
+        recordItem('new_persons', idx, p, 'failed');
       }
     }
 
-    // 2) new_edges
+    // 2) new_edges mit Dedup: gleicher type + from + to (für spouse auch Umkehrrichtung)
     for (const idx of (accepted.new_edges || [])) {
       const e = suggestions.new_edges?.[idx];
-      if (!e || !e.type || !['parent','spouse'].includes(e.type)) { errors.push({ bucket: 'new_edges', idx, error: 'invalid type' }); continue; }
+      if (!e || !e.type || !['parent','spouse'].includes(e.type)) {
+        errors.push({ bucket: 'new_edges', idx, error: 'invalid type' });
+        continue;
+      }
       const resolve = (field) => {
         const idVal = e[field];
         if (idVal === 'this') return personId;
@@ -878,12 +899,12 @@ app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
       };
       let fromId = resolve('from_person_id');
       let toId = resolve('to_person_id');
-      // from/to-Hints: via name_register oder newPersonIds-Index
       const applyHint = (hint) => {
         if (!hint) return null;
         if (hint.new_person_idx !== undefined && newPersonIds.has(hint.new_person_idx)) return newPersonIds.get(hint.new_person_idx);
         if (hint.given_name && hint.surname) {
-          const match = db.prepare('SELECT id FROM persons WHERE given_name=? AND surname=? LIMIT 1')
+          const match = db.prepare(`SELECT id FROM persons
+            WHERE LOWER(TRIM(given_name))=LOWER(TRIM(?)) AND LOWER(TRIM(surname))=LOWER(TRIM(?)) LIMIT 1`)
             .get(hint.given_name, hint.surname);
           if (match) return match.id;
         }
@@ -891,83 +912,177 @@ app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
       };
       if (!fromId) fromId = applyHint(e.from_hint);
       if (!toId) toId = applyHint(e.to_hint);
-      if (!fromId || !toId) { errors.push({ bucket: 'new_edges', idx, error: 'from/to id not resolvable' }); continue; }
-      if (fromId === toId) { errors.push({ bucket: 'new_edges', idx, error: 'self-edge' }); continue; }
+      if (!fromId || !toId) {
+        errors.push({ bucket: 'new_edges', idx, error: 'from/to id not resolvable' });
+        recordItem('new_edges', idx, e, 'failed');
+        continue;
+      }
+      if (fromId === toId) {
+        errors.push({ bucket: 'new_edges', idx, error: 'self-edge' });
+        recordItem('new_edges', idx, e, 'failed');
+        continue;
+      }
+      // Dedup: gleiche Edge schon da?
+      let dupEdge = db.prepare('SELECT id FROM edges WHERE type=? AND from_id=? AND to_id=? LIMIT 1')
+        .get(e.type, fromId, toId);
+      if (!dupEdge && e.type === 'spouse') {
+        dupEdge = db.prepare('SELECT id FROM edges WHERE type=? AND from_id=? AND to_id=? LIMIT 1')
+          .get('spouse', toId, fromId);
+      }
+      if (dupEdge) {
+        skipped.push({ bucket: 'new_edges', idx, reason: 'duplicate', existing_id: dupEdge.id });
+        recordItem('new_edges', idx, e, 'skipped_duplicate', dupEdge.id);
+        continue;
+      }
       try {
         const edgeId = newId();
         const edgeStatus = e.type === 'spouse' ? (e.status || 'married') : null;
         db.prepare(`INSERT INTO edges (id, from_id, to_id, type, since, until, status, created_at)
           VALUES (?,?,?,?,?,?,?,?)`)
           .run(edgeId, fromId, toId, e.type, e.since || null, e.until || null, edgeStatus, now);
+        recordItem('new_edges', idx, e, 'applied', edgeId);
         applied++;
       } catch (e2) {
         errors.push({ bucket: 'new_edges', idx, error: e2.message });
+        recordItem('new_edges', idx, e, 'failed');
       }
     }
 
-    // 3) new_residences
+    // 3) new_residences mit Dedup via place / city+street für diese Person
     for (const idx of (accepted.new_residences || [])) {
       const r = suggestions.new_residences?.[idx];
-      if (!r) { errors.push({ bucket: 'new_residences', idx, error: 'missing' }); continue; }
+      if (!r) {
+        errors.push({ bucket: 'new_residences', idx, error: 'missing' });
+        continue;
+      }
+      const place = r.place || r.city || null;
+      const existing = db.prepare(`
+        SELECT id FROM residences
+        WHERE person_id=? AND (
+          (? IS NOT NULL AND LOWER(TRIM(place))=LOWER(TRIM(?)))
+          OR (? IS NOT NULL AND ? IS NOT NULL
+              AND LOWER(TRIM(city))=LOWER(TRIM(?))
+              AND LOWER(TRIM(COALESCE(street,'')))=LOWER(TRIM(COALESCE(?,''))))
+        ) LIMIT 1`).get(personId, place, place, r.city, r.street || '', r.city, r.street || '');
+      if (existing) {
+        skipped.push({ bucket: 'new_residences', idx, reason: 'duplicate', existing_id: existing.id });
+        recordItem('new_residences', idx, r, 'skipped_duplicate', existing.id);
+        continue;
+      }
       try {
         const id = newId();
         db.prepare(`INSERT INTO residences (id, person_id, place, street, city, district, postal_code, postal_code_historical, region, country, start_date, end_date, kind, notes, created_at)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-          .run(id, personId, r.place || r.city || null, r.street || null, r.city || null, r.district || null,
+          .run(id, personId, place, r.street || null, r.city || null, r.district || null,
                r.postal_code || null, r.postal_code_historical || null, r.region || null, r.country || 'Deutschland',
                r.start_date || null, r.end_date || null, r.kind || null, r.notes || null, now);
+        recordItem('new_residences', idx, r, 'applied', id);
         applied++;
       } catch (e) {
         errors.push({ bucket: 'new_residences', idx, error: e.message });
+        recordItem('new_residences', idx, r, 'failed');
       }
     }
 
-    // 4) residence_updates
+    // 4) residence_updates — nur Felder patchen, die noch leer/null sind. Keine
+    //    bestehende Information überschreiben. Keine no-op's.
     for (const idx of (accepted.residence_updates || [])) {
       const u = suggestions.residence_updates?.[idx];
-      if (!u?.entry_id || !u.patch) { errors.push({ bucket: 'residence_updates', idx, error: 'incomplete' }); continue; }
+      if (!u?.entry_id || !u.patch) {
+        errors.push({ bucket: 'residence_updates', idx, error: 'incomplete' });
+        continue;
+      }
+      const current = db.prepare('SELECT * FROM residences WHERE id=? AND person_id=?').get(u.entry_id, personId);
+      if (!current) {
+        errors.push({ bucket: 'residence_updates', idx, error: 'row not found' });
+        recordItem('residence_updates', idx, u, 'failed');
+        continue;
+      }
       const allowed = ['place','street','city','district','postal_code','postal_code_historical','region','country','start_date','end_date','kind','notes'];
-      const fields = Object.keys(u.patch).filter(k => allowed.includes(k));
-      if (!fields.length) { errors.push({ bucket: 'residence_updates', idx, error: 'no valid fields' }); continue; }
+      // Nur Felder patchen, die noch null/leer sind
+      const fields = Object.keys(u.patch).filter(k => allowed.includes(k) && !current[k]);
+      if (!fields.length) {
+        skipped.push({ bucket: 'residence_updates', idx, reason: 'no-op (all fields already filled)', existing_id: u.entry_id });
+        recordItem('residence_updates', idx, u, 'skipped_duplicate', u.entry_id);
+        continue;
+      }
       const setStr = fields.map(f => `${f}=?`).join(', ');
       const vals = fields.map(f => u.patch[f]);
       try {
         const r = db.prepare(`UPDATE residences SET ${setStr} WHERE id=? AND person_id=?`).run(...vals, u.entry_id, personId);
-        if (r.changes) applied++;
-        else errors.push({ bucket: 'residence_updates', idx, error: 'row not found' });
+        if (r.changes) { applied++; recordItem('residence_updates', idx, u, 'applied', u.entry_id); }
+        else { errors.push({ bucket: 'residence_updates', idx, error: 'row not updated' }); recordItem('residence_updates', idx, u, 'failed'); }
       } catch (e) {
         errors.push({ bucket: 'residence_updates', idx, error: e.message });
+        recordItem('residence_updates', idx, u, 'failed');
       }
     }
 
-    // 5) job_updates
+    // 5) job_updates — nur null-Felder patchen
     for (const idx of (accepted.job_updates || [])) {
       const u = suggestions.job_updates?.[idx];
-      if (!u?.entry_id || !u.patch) { errors.push({ bucket: 'job_updates', idx, error: 'incomplete' }); continue; }
+      if (!u?.entry_id || !u.patch) {
+        errors.push({ bucket: 'job_updates', idx, error: 'incomplete' });
+        continue;
+      }
+      const current = db.prepare('SELECT * FROM jobs WHERE id=? AND person_id=?').get(u.entry_id, personId);
+      if (!current) {
+        errors.push({ bucket: 'job_updates', idx, error: 'row not found' });
+        recordItem('job_updates', idx, u, 'failed');
+        continue;
+      }
       const allowed = ['title','employer','start_date','end_date','place','notes'];
-      const fields = Object.keys(u.patch).filter(k => allowed.includes(k));
-      if (!fields.length) { errors.push({ bucket: 'job_updates', idx, error: 'no valid fields' }); continue; }
+      const fields = Object.keys(u.patch).filter(k => allowed.includes(k) && !current[k]);
+      if (!fields.length) {
+        skipped.push({ bucket: 'job_updates', idx, reason: 'no-op (all fields already filled)', existing_id: u.entry_id });
+        recordItem('job_updates', idx, u, 'skipped_duplicate', u.entry_id);
+        continue;
+      }
       const setStr = fields.map(f => `${f}=?`).join(', ');
       const vals = fields.map(f => u.patch[f]);
       try {
         const r = db.prepare(`UPDATE jobs SET ${setStr} WHERE id=? AND person_id=?`).run(...vals, u.entry_id, personId);
-        if (r.changes) applied++;
-        else errors.push({ bucket: 'job_updates', idx, error: 'row not found' });
+        if (r.changes) { applied++; recordItem('job_updates', idx, u, 'applied', u.entry_id); }
+        else { errors.push({ bucket: 'job_updates', idx, error: 'row not updated' }); recordItem('job_updates', idx, u, 'failed'); }
       } catch (e) {
         errors.push({ bucket: 'job_updates', idx, error: e.message });
+        recordItem('job_updates', idx, u, 'failed');
       }
     }
 
-    // 6) field_updates
+    // 6) field_updates — Race-Condition-Check: 'current' muss match
     for (const idx of (accepted.field_updates || [])) {
       const u = suggestions.field_updates?.[idx];
       const allowed = ['given_name','surname','birth_name','nicknames','gender','birth_date','birth_place','death_date','death_place','notes'];
-      if (!u?.field || !allowed.includes(u.field) || u.suggested === undefined) { errors.push({ bucket: 'field_updates', idx, error: 'invalid field' }); continue; }
+      if (!u?.field || !allowed.includes(u.field) || u.suggested === undefined) {
+        errors.push({ bucket: 'field_updates', idx, error: 'invalid field' });
+        continue;
+      }
+      const row2 = db.prepare(`SELECT ${u.field} AS val FROM persons WHERE id=?`).get(personId);
+      if (!row2) {
+        errors.push({ bucket: 'field_updates', idx, error: 'person missing' });
+        recordItem('field_updates', idx, u, 'failed');
+        continue;
+      }
+      // Race-Condition: current im Vorschlag muss der aktuelle DB-Wert sein (sonst skip)
+      if (u.current !== undefined && u.current !== null && String(row2.val || '') !== String(u.current)) {
+        skipped.push({ bucket: 'field_updates', idx, reason: 'current value changed since review' });
+        recordItem('field_updates', idx, u, 'skipped_duplicate');
+        continue;
+      }
+      // No-op: schon der Zielwert
+      if (String(row2.val || '') === String(u.suggested || '')) {
+        skipped.push({ bucket: 'field_updates', idx, reason: 'already set to suggested value' });
+        recordItem('field_updates', idx, u, 'skipped_duplicate');
+        continue;
+      }
       try {
         db.prepare(`UPDATE persons SET ${u.field}=?, updated_at=? WHERE id=?`).run(u.suggested, now, personId);
         applied++;
+        recordItem('field_updates', idx, u, 'applied', personId);
       } catch (e) {
         errors.push({ bucket: 'field_updates', idx, error: e.message });
+        recordItem('field_updates', idx, u, 'failed');
       }
     }
   });
@@ -980,10 +1095,11 @@ app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
 
   // Status: wenn alles akzeptiert ohne Fehler → done, sonst partially_applied
   const total = Object.values(accepted).reduce((s, arr) => s + (Array.isArray(arr) ? arr.length : 0), 0);
-  const newStatus = applied === 0 ? 'pending' : (errors.length ? 'partially_applied' : 'done');
+  const newStatus = (applied === 0 && skipped.length === 0) ? 'pending'
+    : (errors.length ? 'partially_applied' : 'done');
   db.prepare(`UPDATE ai_reviews SET status=?, applied_at=? WHERE id=?`).run(newStatus, now, row.id);
-  logAudit(req.auth.role, 'ai_review.apply', `${row.id} applied=${applied} errors=${errors.length}`);
-  res.json({ review_id: row.id, applied, requested: total, errors, status: newStatus });
+  logAudit(req.auth.role, 'ai_review.apply', `${row.id} applied=${applied} skipped=${skipped.length} errors=${errors.length}`);
+  res.json({ review_id: row.id, applied, skipped, requested: total, errors, status: newStatus });
 });
 
 /* research hits + sources ---------------------------------------------- */

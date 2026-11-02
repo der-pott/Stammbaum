@@ -1423,6 +1423,15 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
   color: var(--err);
   border-radius: var(--radius-sm);
 }
+.ai-unchanged {
+  padding: var(--sp-3) var(--sp-4);
+  background: color-mix(in oklch, var(--gold) 15%, transparent);
+  border: 1px solid color-mix(in oklch, var(--gold) 40%, var(--line));
+  color: var(--ink-soft);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  margin-bottom: var(--sp-3);
+}
 .ai-section {
   border-top: 1px solid var(--line);
   padding-top: var(--sp-3);

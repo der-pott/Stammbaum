@@ -691,6 +691,7 @@ function computeLayout() {
     satelliteOf.delete(a);
     satelliteOf.delete(b);
   }
+  if (typeof window !== 'undefined') window._lastUpstreamCouples = upstreamCouples;
 
   // Build slots keyed by anchor.
   //
@@ -3132,7 +3133,15 @@ async function openAiReviewDialog(personId) {
     const result = await api.aiReview(personId);
     _aiReview.reviewId = result.review_id;
     _aiReview.suggestions = result.suggestions;
-    renderAiReviewSuggestions(result.suggestions);
+    if (result.unchanged) {
+      // Kontext unverändert seit letztem Review → verwendet cached suggestions
+      body.innerHTML = '';
+      body.insertAdjacentHTML('afterbegin',
+        '<div class="ai-unchanged">⟳ Daten seit letztem KI-Update unverändert — gespeicherte Vorschläge werden gezeigt (kein neuer Claude-Call).</div>');
+      renderAiReviewSuggestions(result.suggestions);
+    } else {
+      renderAiReviewSuggestions(result.suggestions);
+    }
     applyBtn.disabled = false;
   } catch (e) {
     body.innerHTML = `<div class="ai-error">Fehler: ${escapeHtml(e.message || String(e))}</div>`;
@@ -3236,8 +3245,10 @@ function wireAiReviewHandlers() {
       document.getElementById('ai-review-dialog').close();
       await reload();
       renderDetail();
-      const msg = `${result.applied} von ${result.requested} angewendet` + (result.errors?.length ? `, ${result.errors.length} Fehler` : '');
-      alert(msg);
+      const parts = [`${result.applied} von ${result.requested} angewendet`];
+      if (result.skipped?.length) parts.push(`${result.skipped.length} als Duplikat übersprungen`);
+      if (result.errors?.length) parts.push(`${result.errors.length} Fehler`);
+      alert(parts.join(', '));
     } catch (e) {
       alert('Fehler: ' + e.message);
     } finally {
