@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&display=swap">
-  <link rel="stylesheet" href="styles.css?v=30">
+  <link rel="stylesheet" href="styles.css?v=31">
 </head>
 <body>
 
@@ -43,6 +43,12 @@
     <button id="btn-add-edge" class="pill-btn" data-editor hidden>Beziehung</button>
     <button id="btn-import-gedcom" class="icon-btn" data-editor hidden aria-label="GEDCOM importieren" title="GEDCOM importieren">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button id="btn-plausibility" class="icon-btn" data-editor hidden aria-label="Plausibilitäts-Check" title="Plausibilitäts-Check">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l10 20H2L12 2z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M12 9v6M12 18v.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    </button>
+    <button id="btn-recycle" class="icon-btn" data-editor hidden aria-label="Papierkorb" title="Papierkorb">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>
     <button id="btn-logout" class="icon-btn" hidden aria-label="Abmelden" title="Abmelden">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -270,6 +276,24 @@
   </menu>
 </dialog>
 
+<dialog id="recycle-dialog" class="dlg dlg-recycle" aria-label="Papierkorb">
+  <h2 class="dlg-title">Papierkorb</h2>
+  <p class="dlg-sub">Gelöschte Einträge werden nach 90 Tagen automatisch endgültig entfernt. Du kannst sie hier wiederherstellen oder jetzt endgültig löschen.</p>
+  <div id="recycle-body" class="recycle-body"><div class="meta">Lade…</div></div>
+  <menu class="dlg-actions">
+    <button type="button" data-close class="btn-primary">Schließen</button>
+  </menu>
+</dialog>
+
+<dialog id="plausibility-dialog" class="dlg dlg-plausibility" aria-label="Plausibilitäts-Check">
+  <h2 class="dlg-title">Plausibilitäts-Check</h2>
+  <p class="dlg-sub">Automatisch gefundene Auffälligkeiten in den Daten. Klick aufs Dossier öffnet die Person; „Als OK markieren" blendet den Hinweis dauerhaft aus.</p>
+  <div id="plausibility-body" class="plausibility-body"><div class="meta">Lade…</div></div>
+  <menu class="dlg-actions">
+    <button type="button" data-close class="btn-primary">Schließen</button>
+  </menu>
+</dialog>
+
 <!-- Lightbox -->
 <div id="lightbox" class="lightbox" hidden role="dialog" aria-modal="true" aria-label="Dokument-Vollansicht">
   <button class="lightbox-close icon-btn" id="lightbox-close" aria-label="Schließen">
@@ -287,6 +311,6 @@
   <div class="lightbox-caption" id="lightbox-caption"></div>
 </div>
 
-<script src="stammbaum.js?v=48" defer></script>
+<script src="stammbaum.js?v=49" defer></script>
 </body>
 </html>

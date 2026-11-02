@@ -1502,3 +1502,31 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
   color: var(--seal-ink);
 }
 #btn-focus-lineage.active:hover { background: var(--seal); }
+
+/* ---- Recycle Bin & Plausibility --------------------------------------- */
+.dlg-recycle, .dlg-plausibility { min-width: min(640px, 90vw); max-height: 85vh; overflow-y: auto; }
+.recycle-group, .plausibility-group { margin: 12px 0; }
+.recycle-group h3, .plausibility-group h3 {
+  font-size: 13px; font-weight: 600; color: var(--ink-soft);
+  margin: 0 0 8px 0; padding-bottom: 4px; border-bottom: 1px solid var(--border);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.recycle-row, .plausibility-row {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border-faint);
+}
+.recycle-row:last-child, .plausibility-row:last-child { border-bottom: none; }
+.recycle-info, .plausibility-info { flex: 1; min-width: 0; }
+.recycle-summary, .plausibility-title { font-weight: 500; font-size: 14px; }
+.recycle-meta, .plausibility-detail { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+.recycle-actions, .plausibility-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.btn-sm {
+  padding: 4px 10px; font-size: 12px; border: 1px solid var(--border);
+  background: var(--bg-soft); color: var(--ink); border-radius: 4px; cursor: pointer;
+}
+.btn-sm:hover { background: var(--bg); }
+.btn-sm.danger { color: #c0392b; border-color: #c0392b33; }
+.btn-sm.danger:hover { background: #c0392b11; }
+.plausibility-error .plausibility-title { color: #c0392b; }
+.plausibility-warn  .plausibility-title { color: #d68910; }
+.plausibility-info  .plausibility-title { color: var(--ink-soft); }

@@ -437,9 +437,19 @@ function render() {
 function renderList() {
   const ul = document.getElementById('person-list');
   const f = state.filter.toLowerCase();
+  const fPhonetic = f.length >= 3 ? colognePhonetic(f) : '';
   const items = state.persons
     .map(p => ({ p, hay: `${nameOf(p)} ${p.nicknames || ''} ${p.birth_place || ''} ${p.death_place || ''} ${year(p.birth_date) || ''}`.toLowerCase() }))
-    .filter(({ hay }) => !f || hay.includes(f))
+    .filter(({ p, hay }) => {
+      if (!f) return true;
+      if (hay.includes(f)) return true;
+      // Phonetic fallback: match first-given or surname Cologne-equal.
+      if (!fPhonetic) return false;
+      const first = (p.given_name || '').split(/\s+/)[0];
+      return colognePhonetic(first) === fPhonetic
+          || colognePhonetic(p.surname || '') === fPhonetic
+          || colognePhonetic(p.birth_name || '') === fPhonetic;
+    })
     .sort((a, b) => {
       const ay = year(a.p.birth_date) || '9999';
       const by = year(b.p.birth_date) || '9999';
@@ -2287,7 +2297,10 @@ function renderResidence(r) {
   const subParts = [];
   if (r.kind) subParts.push(r.kind);
   if (r.postal_code_historical) subParts.push(`historisch: ${r.postal_code_historical}`);
-  if (r.country && r.country !== 'Deutschland') subParts.push(`${r.region || ''}, ${r.country}`.replace(/^, /, ''));
+  if (r.country && r.country !== 'Deutschland') {
+    const flag = flagForCountry(r.country);
+    subParts.push(`${r.region || ''}, ${flag ? flag + ' ' : ''}${r.country}`.replace(/^, /, ''));
+  }
   else if (r.region && r.region !== r.city) subParts.push(r.region);
   return h('div', { class: 'sub-row' },
     h('div', { class: 'sub-title' }, main),
@@ -3583,3 +3596,257 @@ function wireAiReviewHandlers() {
     }
   };
 }
+
+/* --- Cologne Phonetic (client, same algorithm as api/phonetic.js) --- */
+function colognePhonetic(input) {
+  const s = (input || '').toLowerCase()
+    .replace(/ä/g,'a').replace(/ö/g,'o').replace(/ü/g,'u').replace(/ß/g,'ss')
+    .replace(/[^a-z]/g,'');
+  if (!s) return '';
+  const V = new Set(['a','e','i','j','o','u','y']);
+  const out = [];
+  for (let i=0;i<s.length;i++){
+    const c=s[i], prev=s[i-1], next=s[i+1];
+    let code='';
+    if (V.has(c)) code='0';
+    else if (c==='b') code='1';
+    else if (c==='p' && next!=='h') code='1';
+    else if (c==='p' && next==='h') code='3';
+    else if (c==='d'||c==='t') code=(next==='s'||next==='c'||next==='z')?'8':'2';
+    else if (c==='f'||c==='v'||c==='w') code='3';
+    else if (c==='g'||c==='k'||c==='q') code='4';
+    else if (c==='c') {
+      if (i===0) code=(next && 'ahkloqrux'.includes(next))?'4':'8';
+      else if (prev && 'sz'.includes(prev)) code='8';
+      else if (next && 'ahkoqux'.includes(next)) code='4';
+      else code='8';
+    }
+    else if (c==='x') code=(prev && 'ckq'.includes(prev))?'8':'48';
+    else if (c==='l') code='5';
+    else if (c==='m'||c==='n') code='6';
+    else if (c==='r') code='7';
+    else if (c==='s'||c==='z') code='8';
+    for (const ch of code) if (out.length===0||out[out.length-1]!==ch) out.push(ch);
+  }
+  const first=out[0]||'';
+  return first + out.slice(1).filter(c=>c!=='0').join('');
+}
+
+/* --- Country flags (client) --------------------------------------- */
+const _FLAG_ISO = {
+  'deutschland':'DE','germany':'DE','brd':'DE','ddr':'DE','deutsches reich':'DE','preußen':'DE','preussen':'DE',
+  'österreich':'AT','oesterreich':'AT','austria':'AT',
+  'schweiz':'CH','switzerland':'CH',
+  'frankreich':'FR','france':'FR',
+  'italien':'IT','italy':'IT','italia':'IT',
+  'spanien':'ES','spain':'ES','portugal':'PT',
+  'niederlande':'NL','netherlands':'NL','holland':'NL',
+  'belgien':'BE','belgium':'BE','luxemburg':'LU','luxembourg':'LU',
+  'dänemark':'DK','denmark':'DK','schweden':'SE','sweden':'SE',
+  'norwegen':'NO','norway':'NO','finnland':'FI','finland':'FI',
+  'polen':'PL','poland':'PL','schlesien':'PL',
+  'tschechien':'CZ','czech republic':'CZ','böhmen':'CZ',
+  'slowakei':'SK','ungarn':'HU','hungary':'HU',
+  'rumänien':'RO','romania':'RO','bulgarien':'BG','bulgaria':'BG',
+  'griechenland':'GR','greece':'GR','türkei':'TR','turkey':'TR',
+  'russland':'RU','russia':'RU','sowjetunion':'RU',
+  'ukraine':'UA','belarus':'BY',
+  'litauen':'LT','lettland':'LV','estland':'EE',
+  'kroatien':'HR','serbien':'RS','bosnien':'BA','slowenien':'SI',
+  'großbritannien':'GB','grossbritannien':'GB','united kingdom':'GB','uk':'GB','england':'GB','schottland':'GB',
+  'irland':'IE','ireland':'IE',
+  'usa':'US','vereinigte staaten':'US','united states':'US','amerika':'US',
+  'kanada':'CA','canada':'CA','mexiko':'MX','mexico':'MX',
+  'brasilien':'BR','brazil':'BR','argentinien':'AR','argentina':'AR',
+  'australien':'AU','australia':'AU','neuseeland':'NZ','new zealand':'NZ',
+  'japan':'JP','china':'CN','indien':'IN','india':'IN',
+  'südafrika':'ZA','south africa':'ZA','israel':'IL',
+};
+function flagForCountry(name) {
+  if (!name) return '';
+  const key = String(name).trim().toLowerCase();
+  const iso = _FLAG_ISO[key] || _FLAG_ISO[key.split(/[\s,(]/)[0]];
+  if (!iso) return '';
+  const base = 0x1F1E6;
+  return String.fromCodePoint(...iso.toUpperCase().split('').map(c => base + c.charCodeAt(0) - 65));
+}
+
+/* --- Places autocomplete datalist --------------------------------- */
+const _placesCache = { ts: 0, list: [] };
+async function ensurePlacesDatalist() {
+  const now = Date.now();
+  if (!_placesCache.list.length || now - _placesCache.ts > 60_000) {
+    try {
+      const r = await fetch('/api/places', { credentials: 'include' });
+      if (r.ok) {
+        _placesCache.list = await r.json();
+        _placesCache.ts = now;
+      }
+    } catch { /* ignore */ }
+  }
+  let dl = document.getElementById('places-datalist');
+  if (!dl) {
+    dl = document.createElement('datalist');
+    dl.id = 'places-datalist';
+    document.body.appendChild(dl);
+  }
+  dl.replaceChildren(..._placesCache.list.map(p => {
+    const o = document.createElement('option');
+    o.value = p.place;
+    o.label = `${p.count}×`;
+    return o;
+  }));
+  // Attach to any current place inputs that aren't wired yet.
+  for (const inp of document.querySelectorAll('input[name="birth_place"],input[name="death_place"],input[name="place"],input[name="city"]')) {
+    if (!inp.getAttribute('list')) inp.setAttribute('list', 'places-datalist');
+  }
+}
+
+/* --- Recycle Bin dialog ------------------------------------------- */
+async function openRecycleDialog() {
+  const dlg = document.getElementById('recycle-dialog');
+  const body = document.getElementById('recycle-body');
+  if (!dlg || !body) return;
+  body.innerHTML = '<div class="meta">Lade…</div>';
+  dlg.showModal();
+  try {
+    const r = await fetch('/api/recycle', { credentials: 'include' });
+    const data = await r.json();
+    renderRecycleBody(data);
+  } catch (e) {
+    body.innerHTML = `<div class="meta">Fehler: ${e.message}</div>`;
+  }
+}
+function renderRecycleBody(data) {
+  const body = document.getElementById('recycle-body');
+  const groups = Object.entries(data).filter(([,arr]) => arr.length);
+  if (!groups.length) {
+    body.innerHTML = '<div class="meta">Papierkorb ist leer.</div>';
+    return;
+  }
+  body.innerHTML = '';
+  for (const [resource, items] of groups) {
+    const section = document.createElement('div');
+    section.className = 'recycle-group';
+    section.innerHTML = `<h3>${items[0].label} (${items.length})</h3>`;
+    for (const it of items) {
+      const row = document.createElement('div');
+      row.className = 'recycle-row';
+      const date = (it.deleted_at || '').slice(0, 10);
+      row.innerHTML = `
+        <div class="recycle-info">
+          <div class="recycle-summary">${escapeHtml(it.summary)}</div>
+          <div class="recycle-meta">gelöscht ${date} von ${it.deleted_by || '?'}</div>
+        </div>
+        <div class="recycle-actions">
+          <button type="button" class="btn-sm" data-restore>↩ Wiederherstellen</button>
+          <button type="button" class="btn-sm danger" data-purge>✕ Endgültig löschen</button>
+        </div>`;
+      row.querySelector('[data-restore]').onclick = async () => {
+        if (!confirm(`"${it.summary}" wiederherstellen?`)) return;
+        await fetch(`/api/recycle/${resource}/${it.id}/restore`, { method: 'POST', credentials: 'include' });
+        await reload();
+        openRecycleDialog();
+      };
+      row.querySelector('[data-purge]').onclick = async () => {
+        if (!confirm(`"${it.summary}" ENDGÜLTIG löschen? Kann nicht rückgängig gemacht werden.`)) return;
+        await fetch(`/api/recycle/${resource}/${it.id}`, { method: 'DELETE', credentials: 'include' });
+        openRecycleDialog();
+      };
+      section.appendChild(row);
+    }
+    body.appendChild(section);
+  }
+}
+
+/* --- Plausibility dialog ------------------------------------------ */
+async function openPlausibilityDialog() {
+  const dlg = document.getElementById('plausibility-dialog');
+  const body = document.getElementById('plausibility-body');
+  if (!dlg || !body) return;
+  body.innerHTML = '<div class="meta">Prüfe…</div>';
+  dlg.showModal();
+  try {
+    const r = await fetch('/api/plausibility', { credentials: 'include' });
+    const data = await r.json();
+    renderPlausibilityBody(data.issues || []);
+  } catch (e) {
+    body.innerHTML = `<div class="meta">Fehler: ${e.message}</div>`;
+  }
+}
+function renderPlausibilityBody(issues) {
+  const body = document.getElementById('plausibility-body');
+  if (!issues.length) {
+    body.innerHTML = '<div class="meta">Alles plausibel. ✓</div>';
+    return;
+  }
+  const bySev = { error: [], warn: [], info: [] };
+  for (const i of issues) (bySev[i.severity] || bySev.info).push(i);
+  body.innerHTML = '';
+  for (const sev of ['error', 'warn', 'info']) {
+    if (!bySev[sev].length) continue;
+    const sectionTitle = sev === 'error' ? 'Fehler' : sev === 'warn' ? 'Warnungen' : 'Hinweise';
+    const section = document.createElement('div');
+    section.className = `plausibility-group plausibility-${sev}`;
+    section.innerHTML = `<h3>${sectionTitle} (${bySev[sev].length})</h3>`;
+    for (const issue of bySev[sev]) {
+      const row = document.createElement('div');
+      row.className = 'plausibility-row';
+      row.innerHTML = `
+        <div class="plausibility-info">
+          <div class="plausibility-title">${escapeHtml(issue.title)}</div>
+          <div class="plausibility-detail">${escapeHtml(issue.detail)}</div>
+        </div>
+        <div class="plausibility-actions">
+          <button type="button" class="btn-sm" data-open>Öffnen</button>
+          <button type="button" class="btn-sm" data-dismiss>Als OK markieren</button>
+        </div>`;
+      row.querySelector('[data-open]').onclick = () => {
+        document.getElementById('plausibility-dialog').close();
+        if (issue.person_id) select(issue.person_id);
+      };
+      row.querySelector('[data-dismiss]').onclick = async () => {
+        await fetch('/api/plausibility/dismiss', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ issue_key: issue.key }),
+        });
+        openPlausibilityDialog();
+      };
+      section.appendChild(row);
+    }
+    body.appendChild(section);
+  }
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+/* --- Wire new buttons --------------------------------------------- */
+(function wireExtras() {
+  const bind = () => {
+    const rec = document.getElementById('btn-recycle');
+    const pla = document.getElementById('btn-plausibility');
+    if (rec && !rec._wired) { rec._wired = true; rec.onclick = openRecycleDialog; }
+    if (pla && !pla._wired) { pla._wired = true; pla.onclick = openPlausibilityDialog; }
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
+  else bind();
+  // Rebind after re-renders.
+  const obs = new MutationObserver(bind);
+  obs.observe(document.body, { childList: true, subtree: true });
+})();
+
+/* --- Refresh places datalist on dialogs open ---------------------- */
+(function wirePlacesAutocomplete() {
+  document.addEventListener('click', (ev) => {
+    const t = ev.target;
+    if (!t) return;
+    if (t.id === 'btn-add-person' || t.closest('[data-add-sub]') || t.textContent === 'Bearbeiten') {
+      setTimeout(ensurePlacesDatalist, 50);
+    }
+  }, true);
+})();
+

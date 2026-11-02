@@ -16,6 +16,8 @@ import { startWorker, enqueueJob, getJob } from './scrape_worker.js';
 import { computeConsensus } from './consensus.js';
 import { createRateLimiter } from './ratelimit.js';
 import { gedcomToPayload } from './gedcom.js';
+import { runPlausibilityChecks } from './plausibility.js';
+import { colognePhonetic } from './phonetic.js';
 import sharp from 'sharp';
 
 const app = express();
@@ -142,9 +144,11 @@ app.get('/api/persons', requireViewer, (_req, res) => {
   const rows = db.prepare(`
     SELECT p.*, (
       SELECT pi.image_id FROM person_images pi
-      WHERE pi.person_id = p.id AND pi.role = 'Portrait' LIMIT 1
+      WHERE pi.person_id = p.id AND pi.role = 'Portrait'
+        AND pi.deleted_at IS NULL LIMIT 1
     ) AS portrait_image_id
     FROM persons p
+    WHERE p.deleted_at IS NULL
     ORDER BY surname, given_name
   `).all();
   res.json(rows);
@@ -248,6 +252,26 @@ app.post('/api/persons/:id/portrait/crop', requireEditor, async (req, res) => {
 
 app.post('/api/persons', requireEditor, (req, res) => {
   const data = sanitizePerson(req.body || {});
+  // Phonetic dedup hint: if a very similar name already exists (same Cologne-code
+  // for first given + surname/birth_name), surface the candidates. Client can
+  // show them to the user; we still allow the insert.
+  let dedupHints = [];
+  try {
+    const first = (data.given_name || '').split(/\s+/)[0];
+    const last  = data.surname || data.birth_name || '';
+    const key   = colognePhonetic(first + '|' + last);
+    if (key) {
+      const candidates = db.prepare(`
+        SELECT id, given_name, surname, birth_name, birth_date
+        FROM persons WHERE deleted_at IS NULL
+      `).all();
+      dedupHints = candidates
+        .map(p => ({ p, k: colognePhonetic(((p.given_name||'').split(/\s+/)[0]) + '|' + (p.surname || p.birth_name || '')) }))
+        .filter(x => x.k === key)
+        .slice(0, 5)
+        .map(x => x.p);
+    }
+  } catch { /* non-fatal */ }
   const id = newId();
   const now = nowIso();
   db.prepare(`
@@ -264,18 +288,21 @@ app.post('/api/persons', requireEditor, (req, res) => {
     ...data, created_at: now, updated_at: now,
   });
   logAudit(req.auth.role, 'person.create', id);
-  res.status(201).json(db.prepare('SELECT * FROM persons WHERE id=?').get(id));
+  const created = db.prepare('SELECT * FROM persons WHERE id=?').get(id);
+  if (dedupHints.length) created._dedup_hints = dedupHints;
+  res.status(201).json(created);
 });
 
 app.get('/api/persons/:id', requireViewer, (req, res) => {
-  const person = db.prepare('SELECT * FROM persons WHERE id=?').get(req.params.id);
+  const person = db.prepare('SELECT * FROM persons WHERE id=? AND deleted_at IS NULL').get(req.params.id);
   if (!person) return res.status(404).json({ error: 'not found' });
-  const edges = db.prepare('SELECT * FROM edges WHERE from_id=? OR to_id=?')
+  const edges = db.prepare('SELECT * FROM edges WHERE (from_id=? OR to_id=?) AND deleted_at IS NULL')
     .all(req.params.id, req.params.id);
   const images = db.prepare(`
     SELECT i.id, i.mime, i.bytes, i.caption, i.taken_at, pi.role
     FROM images i JOIN person_images pi ON pi.image_id = i.id
-    WHERE pi.person_id = ? ORDER BY COALESCE(i.taken_at, i.created_at) ASC
+    WHERE pi.person_id = ? AND pi.deleted_at IS NULL AND i.deleted_at IS NULL
+    ORDER BY COALESCE(i.taken_at, i.created_at) ASC
   `).all(req.params.id);
   res.json({ person, edges, images });
 });
@@ -293,15 +320,24 @@ app.patch('/api/persons/:id', requireEditor, (req, res) => {
 });
 
 app.delete('/api/persons/:id', requireEditor, (req, res) => {
-  const info = db.prepare('DELETE FROM persons WHERE id=?').run(req.params.id);
-  logAudit(req.auth.role, 'person.delete', req.params.id);
-  res.json({ deleted: info.changes });
+  // Soft-Delete: setzt deleted_at, Daten bleiben recoverable im Recycle Bin.
+  // ?hard=1 → endgültig löschen (Recycle Bin → Endgültig löschen).
+  const hard = req.query.hard === '1';
+  if (hard) {
+    const info = db.prepare('DELETE FROM persons WHERE id=?').run(req.params.id);
+    logAudit(req.auth.role, 'person.delete.hard', req.params.id);
+    return res.json({ deleted: info.changes, hard: true });
+  }
+  const info = db.prepare('UPDATE persons SET deleted_at=?, deleted_by=? WHERE id=? AND deleted_at IS NULL')
+    .run(nowIso(), req.auth.role, req.params.id);
+  logAudit(req.auth.role, 'person.delete.soft', req.params.id);
+  res.json({ deleted: info.changes, soft: true });
 });
 
 /* edges ----------------------------------------------------------------- */
 
 app.get('/api/edges', requireViewer, (_req, res) => {
-  res.json(db.prepare('SELECT * FROM edges').all());
+  res.json(db.prepare('SELECT * FROM edges WHERE deleted_at IS NULL').all());
 });
 
 const VALID_SPOUSE_STATUS = new Set(['married', 'divorced', 'widowed', 'engaged', 'partner']);
@@ -372,9 +408,16 @@ app.patch('/api/edges/:id', requireEditor, (req, res) => {
 });
 
 app.delete('/api/edges/:id', requireEditor, (req, res) => {
-  const info = db.prepare('DELETE FROM edges WHERE id=?').run(req.params.id);
-  logAudit(req.auth.role, 'edge.delete', req.params.id);
-  res.json({ deleted: info.changes });
+  const hard = req.query.hard === '1';
+  if (hard) {
+    const info = db.prepare('DELETE FROM edges WHERE id=?').run(req.params.id);
+    logAudit(req.auth.role, 'edge.delete.hard', req.params.id);
+    return res.json({ deleted: info.changes, hard: true });
+  }
+  const info = db.prepare('UPDATE edges SET deleted_at=?, deleted_by=? WHERE id=? AND deleted_at IS NULL')
+    .run(nowIso(), req.auth.role, req.params.id);
+  logAudit(req.auth.role, 'edge.delete.soft', req.params.id);
+  res.json({ deleted: info.changes, soft: true });
 });
 
 /* tree ------------------------------------------------------------------ */
@@ -383,11 +426,13 @@ app.get('/api/tree', requireViewer, (_req, res) => {
   const persons = db.prepare(`
     SELECT p.*, (
       SELECT pi.image_id FROM person_images pi
-      WHERE pi.person_id = p.id AND pi.role = 'Portrait' LIMIT 1
+      WHERE pi.person_id = p.id AND pi.role = 'Portrait'
+        AND pi.deleted_at IS NULL LIMIT 1
     ) AS portrait_image_id
     FROM persons p
+    WHERE p.deleted_at IS NULL
   `).all();
-  const edges = db.prepare('SELECT * FROM edges').all();
+  const edges = db.prepare('SELECT * FROM edges WHERE deleted_at IS NULL').all();
   res.json({ persons, edges });
 });
 
@@ -661,7 +706,7 @@ function sanitizeSub(cfg, body) {
 for (const [kind, cfg] of Object.entries(SUB_RESOURCES)) {
   const readGuard = cfg.editorOnlyRead ? requireEditor : requireViewer;
   app.get(`/api/persons/:id/${kind}`, readGuard, (req, res) => {
-    const rows = db.prepare(`SELECT * FROM ${cfg.table} WHERE person_id=? ORDER BY ${cfg.order || 'created_at'}`).all(req.params.id);
+    const rows = db.prepare(`SELECT * FROM ${cfg.table} WHERE person_id=? AND deleted_at IS NULL ORDER BY ${cfg.order || 'created_at'}`).all(req.params.id);
     res.json(rows);
   });
   app.post(`/api/persons/:id/${kind}`, requireEditor, (req, res) => {
@@ -694,9 +739,16 @@ for (const [kind, cfg] of Object.entries(SUB_RESOURCES)) {
     res.json(db.prepare(`SELECT * FROM ${cfg.table} WHERE id=?`).get(req.params.sid));
   });
   app.delete(`/api/persons/:id/${kind}/:sid`, requireEditor, (req, res) => {
-    const info = db.prepare(`DELETE FROM ${cfg.table} WHERE id=? AND person_id=?`).run(req.params.sid, req.params.id);
-    logAudit(req.auth.role, `${kind}.delete`, req.params.sid);
-    res.json({ deleted: info.changes });
+    const hard = req.query.hard === '1';
+    if (hard) {
+      const info = db.prepare(`DELETE FROM ${cfg.table} WHERE id=? AND person_id=?`).run(req.params.sid, req.params.id);
+      logAudit(req.auth.role, `${kind}.delete.hard`, req.params.sid);
+      return res.json({ deleted: info.changes, hard: true });
+    }
+    const info = db.prepare(`UPDATE ${cfg.table} SET deleted_at=?, deleted_by=? WHERE id=? AND person_id=? AND deleted_at IS NULL`)
+      .run(nowIso(), req.auth.role, req.params.sid, req.params.id);
+    logAudit(req.auth.role, `${kind}.delete.soft`, req.params.sid);
+    res.json({ deleted: info.changes, soft: true });
   });
 }
 
@@ -1206,6 +1258,124 @@ app.post('/api/research/hits/:id/apply', requireEditor, (req, res) => {
 });
 
 function safeJson(s) { try { return JSON.parse(s || 'null'); } catch { return null; } }
+
+/* recycle bin ----------------------------------------------------------- */
+
+const SOFT_DELETE_RESOURCES = {
+  persons:          { table: 'persons', label: 'Person', summary: p => [p.given_name, p.surname].filter(Boolean).join(' ') || 'unbenannt' },
+  edges:            { table: 'edges',   label: 'Beziehung', summary: e => `${e.type} (${(e.from_id||'').slice(0,8)}→${(e.to_id||'').slice(0,8)})` },
+  residences:       { table: 'residences', label: 'Wohnort', summary: r => r.place || r.city || 'Wohnort' },
+  jobs:             { table: 'jobs', label: 'Beruf', summary: j => j.title || 'Beruf' },
+  education:        { table: 'education', label: 'Ausbildung', summary: e => e.institution || e.field || 'Ausbildung' },
+  military_service: { table: 'military_service', label: 'Militärdienst', summary: m => m.branch || 'Militär' },
+  health_events:    { table: 'health_events', label: 'Gesundheit', summary: h => h.condition || 'Gesundheit' },
+  anecdotes:        { table: 'anecdotes', label: 'Anekdote', summary: a => a.title || (a.text || '').slice(0, 60) },
+  images:           { table: 'images', label: 'Bild', summary: i => i.caption || 'Bild' },
+};
+
+app.get('/api/recycle', requireViewer, (_req, res) => {
+  const result = {};
+  for (const [key, cfg] of Object.entries(SOFT_DELETE_RESOURCES)) {
+    const rows = db.prepare(`SELECT * FROM ${cfg.table} WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC`).all();
+    result[key] = rows.map(r => ({
+      id: r.id,
+      resource: key,
+      label: cfg.label,
+      summary: cfg.summary(r),
+      deleted_at: r.deleted_at,
+      deleted_by: r.deleted_by,
+      row: r,
+    }));
+  }
+  res.json(result);
+});
+
+app.post('/api/recycle/:resource/:id/restore', requireEditor, (req, res) => {
+  const cfg = SOFT_DELETE_RESOURCES[req.params.resource];
+  if (!cfg) return res.status(400).json({ error: 'unknown resource' });
+  const info = db.prepare(`UPDATE ${cfg.table} SET deleted_at=NULL, deleted_by=NULL WHERE id=? AND deleted_at IS NOT NULL`)
+    .run(req.params.id);
+  logAudit(req.auth.role, 'recycle.restore', `${req.params.resource}/${req.params.id}`);
+  res.json({ restored: info.changes });
+});
+
+app.delete('/api/recycle/:resource/:id', requireEditor, (req, res) => {
+  const cfg = SOFT_DELETE_RESOURCES[req.params.resource];
+  if (!cfg) return res.status(400).json({ error: 'unknown resource' });
+  const info = db.prepare(`DELETE FROM ${cfg.table} WHERE id=? AND deleted_at IS NOT NULL`).run(req.params.id);
+  logAudit(req.auth.role, 'recycle.purge', `${req.params.resource}/${req.params.id}`);
+  res.json({ purged: info.changes });
+});
+
+// Auto-Purge: Items die laenger als N Tage im Recycle Bin liegen werden
+// bei Boot endgueltig geloescht. Default 90 Tage; via env RECYCLE_PURGE_DAYS=0 deaktivieren.
+const PURGE_DAYS = parseInt(process.env.RECYCLE_PURGE_DAYS || '90', 10);
+if (PURGE_DAYS > 0) {
+  const cutoff = new Date(Date.now() - PURGE_DAYS * 86400_000).toISOString();
+  for (const [key, cfg] of Object.entries(SOFT_DELETE_RESOURCES)) {
+    try {
+      const info = db.prepare(`DELETE FROM ${cfg.table} WHERE deleted_at IS NOT NULL AND deleted_at < ?`).run(cutoff);
+      if (info.changes) console.log(`[recycle] auto-purged ${info.changes} ${key} older than ${PURGE_DAYS}d`);
+    } catch (e) { console.warn(`[recycle] purge ${key} failed:`, e.message); }
+  }
+}
+
+/* places autocomplete --------------------------------------------------- */
+
+// Alle Orte die bereits in Person-/Residenz-/Job-/Education-Feldern vorkommen,
+// gruppiert mit Zähler. Für datalist-Autocomplete.
+app.get('/api/places', requireViewer, (_req, res) => {
+  const sources = [
+    'SELECT birth_place AS place FROM persons WHERE deleted_at IS NULL AND birth_place IS NOT NULL AND birth_place <> ""',
+    'SELECT death_place AS place FROM persons WHERE deleted_at IS NULL AND death_place IS NOT NULL AND death_place <> ""',
+    'SELECT place        FROM residences WHERE deleted_at IS NULL AND place IS NOT NULL AND place <> ""',
+    'SELECT city AS place FROM residences WHERE deleted_at IS NULL AND city  IS NOT NULL AND city  <> ""',
+    'SELECT place        FROM jobs       WHERE deleted_at IS NULL AND place IS NOT NULL AND place <> ""',
+    'SELECT place        FROM education  WHERE deleted_at IS NULL AND place IS NOT NULL AND place <> ""',
+  ];
+  const counts = new Map();
+  for (const sql of sources) {
+    try {
+      for (const row of db.prepare(sql).all()) {
+        const p = (row.place || '').trim();
+        if (!p) continue;
+        counts.set(p, (counts.get(p) || 0) + 1);
+      }
+    } catch { /* table may not exist in older DBs */ }
+  }
+  const list = Array.from(counts.entries())
+    .map(([place, count]) => ({ place, count }))
+    .sort((a, b) => b.count - a.count || a.place.localeCompare(b.place));
+  res.json(list);
+});
+
+/* plausibility ---------------------------------------------------------- */
+
+app.get('/api/plausibility', requireViewer, (_req, res) => {
+  try {
+    const issues = runPlausibilityChecks(db);
+    res.json({ issues, generated_at: nowIso() });
+  } catch (e) {
+    console.error('[plausibility]', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/plausibility/dismiss', requireEditor, (req, res) => {
+  const key = String(req.body?.issue_key || '').trim();
+  const note = req.body?.note ? String(req.body.note).slice(0, 500) : null;
+  if (!key) return res.status(400).json({ error: 'issue_key required' });
+  db.prepare(`INSERT OR REPLACE INTO plausibility_dismissals (issue_key, note, dismissed_at, dismissed_by)
+              VALUES (?, ?, ?, ?)`).run(key, note, nowIso(), req.auth.role);
+  logAudit(req.auth.role, 'plausibility.dismiss', key);
+  res.json({ dismissed: key });
+});
+
+app.delete('/api/plausibility/dismiss/:key', requireEditor, (req, res) => {
+  const info = db.prepare('DELETE FROM plausibility_dismissals WHERE issue_key=?').run(req.params.key);
+  logAudit(req.auth.role, 'plausibility.undismiss', req.params.key);
+  res.json({ removed: info.changes });
+});
 
 /* health ---------------------------------------------------------------- */
 
