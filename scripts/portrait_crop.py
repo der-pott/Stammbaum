@@ -30,11 +30,14 @@ def crop(in_path: str, out_path: str, size: int = 1200) -> dict:
         x, y, fw, fh = max(faces, key=lambda f: f[2]*f[3])
         cx = x + fw / 2
         cy = y + fh / 2
-        # Großzügiges Padding für Portrait: Gesicht ca. 42% des Bildes
-        box_size = max(fw, fh) * 2.4
+        # Enges Portrait: Gesicht ca. 60% der Höhe (padding factor 1.6).
+        # Grund: viele Vorlagen haben am Rand noch Lochverstärkungen, Rahmen,
+        # Hintergrund-Dreck. Tightly auf Gesicht+Hals/Schultern zu croppen hält
+        # das meiste davon außerhalb.
+        box_size = max(fw, fh) * 1.65
         half = box_size / 2
-        # Nach oben etwas mehr Platz für Haar/Stirn (Shift -8% der Box-Höhe)
-        shift_up = box_size * 0.08
+        # Nach oben leicht shiften (Haar/Stirn): 4% der Box
+        shift_up = box_size * 0.04
         x1 = int(max(0, cx - half))
         y1 = int(max(0, cy - half - shift_up))
         x2 = int(min(w, cx + half))
@@ -48,7 +51,7 @@ def crop(in_path: str, out_path: str, size: int = 1200) -> dict:
         x2 = min(w, x1 + side)
         y2 = min(h, y1 + side)
         crop_img = img[y1:y2, x1:x2]
-        method = f'face-crop (face {fw}x{fh} bei {x},{y})'
+        method = f'face-crop (face {fw}x{fh} bei {x},{y}, padding 1.65x)'
 
     # Resize auf Zielgröße
     crop_img = cv2.resize(crop_img, (size, size), interpolation=cv2.INTER_AREA)

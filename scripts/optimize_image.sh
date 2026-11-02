@@ -30,12 +30,15 @@ RATIO=$(python3 -c "print(f'{$TRIM_AREA/$ORIG_AREA:.3f}')" 2>/dev/null)
 TOO_AGGRESSIVE=$(python3 -c "print(1 if $RATIO < 0.50 else 0)" 2>/dev/null)
 
 if [ "$TOO_AGGRESSIVE" = "1" ]; then
-  "$MAGICK" "$IN" -auto-orient -colorspace sRGB -resize '2000x2000>' -strip -quality 85 "$OUT"
+  # Noch mal probieren mit Shave 2% um Lochverstärkungen o.ä. am Rand zu entfernen
+  "$MAGICK" "$IN" -auto-orient -colorspace sRGB -shave '2%x2%' -fuzz 25% -trim +repage -resize '2000x2000>' -strip -quality 85 "$OUT"
   rm -f "$TMP"
-  echo "[no-trim] $IN → $OUT (ratio $RATIO zu aggressiv)"
+  echo "[shave+trim] $IN → $OUT (urspünglicher Trim $RATIO zu aggressiv)"
 else
-  "$MAGICK" "$TMP" -resize '2000x2000>' -strip -quality 85 "$OUT"
+  # Zusätzlich 1.5% an jeder Seite abschneiden um verbleibende Rand-Dreck (Lochverstärkungen,
+  # Fingernagel-Spitzen, Scanner-Streifen) wegzukriegen
+  "$MAGICK" "$TMP" -shave '1.5%x1.5%' -resize '2000x2000>' -strip -quality 85 "$OUT"
   rm -f "$TMP"
   OUT_PIX=$("$MAGICK" identify -format "%w*%h" "$OUT" 2>/dev/null)
-  echo "[trimmed] $IN ($ORIG_PIX) → $OUT ($OUT_PIX, ratio $RATIO)"
+  echo "[trimmed+shave] $IN ($ORIG_PIX) → $OUT ($OUT_PIX, ratio $RATIO)"
 fi
