@@ -482,281 +482,288 @@ function computeLayout() {
   }
   for (const p of state.persons) if (!gen.has(p.id)) gen.set(p.id, 0);
 
-  // --- family units ----------------------------------------------------
-  // A unit represents a couple (or single parent) plus their children.
-  // Each person belongs to exactly ONE "home" unit (where they appear as a
-  // child under their parents) and at most one "placement" unit (where they
-  // appear as a parent / spouse).
-  const units = [];           // array of {id, members:[ids], children:[ids]}
-  let unitCounter = 0;
+  // --- SLOTS ----------------------------------------------------------
+  // A SLOT is one position in a generation row. It consists of an anchor
+  // person (child of parents, or root) and 0..N satellites (current/ex
+  // spouses who are rendered next to the anchor).
+  //
+  // Rules:
+  //  - Every person has at most ONE slot:
+  //    * Anchor of their own slot if (has parents) OR (no parents but no
+  //      spouse-anchor claims them).
+  //    * Satellite in the slot of their spouse if (no parents) AND they are
+  //      married/partnered to someone who gets their own slot.
+  //  - A person with parents is ALWAYS their own anchor (never a satellite).
+  //    Cross-tree spouse edges (two anchors married to each other) are drawn
+  //    as a dashed arc.
 
-  // 1. Spouse couples: each spouse edge → a couple-unit (no children yet).
-  const couplesSeen = new Set();
-  const coupleByKey = new Map();  // "a|b" (sorted) -> unit
-  for (const e of state.edges) {
-    if (e.type !== 'spouse') continue;
-    const a = e.from_id, b = e.to_id;
-    const key = a < b ? `${a}|${b}` : `${b}|${a}`;
-    if (couplesSeen.has(key)) continue;
-    couplesSeen.add(key);
-    const uid = `u${unitCounter++}`;
-    const u = { id: uid, members: [a, b], children: [] };
-    units.push(u);
-    coupleByKey.set(key, u);
+  const MARRIAGE_GAP = 56;   // anchor <-> satellite gap (same as COUPLE_GAP)
+  const SATELLITE_GAP = 44;  // satellite <-> satellite gap
+
+  // isAnchorOf: who gets their own slot. Everyone with parents is an anchor.
+  const isAnchor = new Set();
+  for (const p of state.persons) {
+    if ((parentOf.get(p.id) || []).length > 0) isAnchor.add(p.id);
   }
 
-  const homeOfPerson = new Map();   // personId -> home unit id (where they are a child)
-
-  // 2. For each person with parents in DB, assign to home unit.
-  //    Priority: couple-unit of both parents > couple-unit of one parent >
-  //    (new or existing) singleton for the first parent.
+  // satelliteOf: for persons without parents, if they're married to an anchor,
+  // they become that anchor's satellite. Pick the anchor with the most-recent
+  // "primary" relationship.
+  const satelliteOf = new Map();   // satelliteId -> anchorId
   for (const p of state.persons) {
-    const pars = parentOf.get(p.id) || [];
+    if (isAnchor.has(p.id)) continue;
+    const partners = [...(spouseOf.get(p.id) || [])];
+    const anchorPartners = partners.filter(x => isAnchor.has(x));
+    if (anchorPartners.length) {
+      // Pick first anchor as owner. If multiple, the one with most children
+      // via this edge wins; else first by id for stability.
+      anchorPartners.sort((a, b) => {
+        const ca = childrenShared(a, p.id);
+        const cb = childrenShared(b, p.id);
+        if (ca !== cb) return cb - ca;
+        return a.localeCompare(b);
+      });
+      satelliteOf.set(p.id, anchorPartners[0]);
+    }
+  }
+  function childrenShared(a, b) {
+    const ca = new Set(childOf.get(a) || []);
+    const cb = childOf.get(b) || [];
+    let n = 0;
+    for (const c of cb) if (ca.has(c)) n++;
+    return n;
+  }
+
+  // Persons without parents who were NOT taken as satellites are their own anchors.
+  for (const p of state.persons) {
+    if (isAnchor.has(p.id)) continue;
+    if (satelliteOf.has(p.id)) continue;
+    isAnchor.add(p.id);
+  }
+
+  // Build slots keyed by anchor.
+  const slotByAnchor = new Map();
+  for (const a of isAnchor) {
+    const sats = [];
+    for (const [sid, aid] of satelliteOf) if (aid === a) sats.push(sid);
+    // Order satellites: by edge.since, then by satellite birth-year.
+    sats.sort((x, y) => {
+      const kx = a < x ? `${a}|${x}` : `${x}|${a}`;
+      const ky = a < y ? `${a}|${y}` : `${y}|${a}`;
+      const sx = spouseEdges.get(kx)?.since || '';
+      const sy = spouseEdges.get(ky)?.since || '';
+      if (sx !== sy) return sx.localeCompare(sy);
+      const bx = year(personById.get(x)?.birth_date) || '9999';
+      const by = year(personById.get(y)?.birth_date) || '9999';
+      return bx.localeCompare(by);
+    });
+    const width = NODE_W + sats.length * (MARRIAGE_GAP + NODE_W);
+    slotByAnchor.set(a, { anchorId: a, satellites: sats, width });
+  }
+
+  // --- children-of-slot ---
+  // For each slot, which other slots are its children?
+  // A slot S is a child of slot P iff S.anchor's parents include P.anchor
+  // AND the OTHER parent is P.anchor OR a satellite of P.anchor OR not in
+  // any slot (orphan parent).
+  // Simplification: a child slot C with parents [pA, pB] belongs under:
+  //   - the slot of pA if pA is an anchor
+  //   - else the slot of pB if pB is an anchor
+  //   - If pA and pB are both satellites of DIFFERENT anchors, parent slot
+  //     is one of them (whichever's anchor is also parent of C — but anchor
+  //     may not be a parent... edge case; take pA's owning anchor's slot).
+  const childSlotsOfAnchor = new Map();  // anchorId -> [childAnchorId]
+  for (const a of isAnchor) childSlotsOfAnchor.set(a, []);
+  for (const c of isAnchor) {
+    const pars = parentOf.get(c) || [];
     if (!pars.length) continue;
-    let home = null;
-    if (pars.length >= 2) {
-      // try each pair of parents as couple key
-      outer: for (let i = 0; i < pars.length; i++) {
-        for (let j = i + 1; j < pars.length; j++) {
-          const a = pars[i], b = pars[j];
-          const k = a < b ? `${a}|${b}` : `${b}|${a}`;
-          const u = coupleByKey.get(k);
-          if (u) { home = u; break outer; }
-        }
-      }
-    }
-    if (!home) {
+    // Prefer a parent that IS an anchor:
+    let parentAnchor = pars.find(x => isAnchor.has(x));
+    if (!parentAnchor) {
+      // Both parents are satellites: resolve to the anchor they belong to.
       for (const par of pars) {
-        home = units.find(u => u.members.length === 2 && u.members.includes(par));
-        if (home) break;
+        if (satelliteOf.has(par)) { parentAnchor = satelliteOf.get(par); break; }
       }
     }
-    if (!home) {
-      const par = pars[0];
-      home = units.find(u => u.members.length === 1 && u.members[0] === par);
-      if (!home) {
-        const uid = `u${unitCounter++}`;
-        home = { id: uid, members: [par], children: [] };
-        units.push(home);
-      }
-    }
-    if (!home.children.includes(p.id)) home.children.push(p.id);
-    homeOfPerson.set(p.id, home.id);
+    if (!parentAnchor) continue;
+    childSlotsOfAnchor.get(parentAnchor).push(c);
   }
 
-  // 3. For persons without parents AND not in any couple-unit: give them a
-  //    standalone singleton home-unit so they still appear on the chart.
-  for (const p of state.persons) {
-    if (homeOfPerson.has(p.id)) continue;
-    const inCouple = units.some(u => u.members.length === 2 && u.members.includes(p.id));
-    if (inCouple) continue;
-    const uid = `u${unitCounter++}`;
-    const u = { id: uid, members: [p.id], children: [] };
-    units.push(u);
-    homeOfPerson.set(p.id, uid);
+  // Order sibling slots by birth-year of their anchor.
+  for (const [a, kids] of childSlotsOfAnchor) {
+    kids.sort((x, y) => {
+      const bx = year(personById.get(x)?.birth_date) || '9999';
+      const by = year(personById.get(y)?.birth_date) || '9999';
+      return bx.localeCompare(by);
+    });
   }
-
-  // Placement units: WHERE each person is drawn on the canvas.
-  // Distinct from HOME units (where they appear as a child of their parents).
-  //   - If person is a spouse in some couple-unit → that couple is their placement.
-  //   - Else they get a DEDICATED singleton placement-unit (even if they have
-  //     parents and are listed in their parents' home-unit's children — this
-  //     dedicated placement is what gets positioned under the parent couple).
-  const placementOfPerson = new Map();
-  for (const u of units) {
-    if (u.members.length >= 2) {
-      for (const m of u.members) {
-        if (!placementOfPerson.has(m)) placementOfPerson.set(m, u.id);
-      }
-    }
-  }
-  for (const p of state.persons) {
-    if (placementOfPerson.has(p.id)) continue;
-    // Reuse an existing singleton home-unit if one already exists for this
-    // person (parentless orphans created in step 3 above).
-    const homeUid = homeOfPerson.get(p.id);
-    if (homeUid) {
-      const home = units.find(u => u.id === homeUid);
-      if (home && home.members.length === 1 && home.members[0] === p.id) {
-        placementOfPerson.set(p.id, homeUid);
-        continue;
-      }
-    }
-    // Dedicated placement singleton.
-    const uid = `p${unitCounter++}`;
-    const u = { id: uid, members: [p.id], children: [] };
-    units.push(u);
-    placementOfPerson.set(p.id, uid);
-  }
-
-  // Index units by id (after all units — including placement singletons — exist).
-  const unitById = new Map(units.map(u => [u.id, u]));
-
-  // Children of a unit (as child-units) = unique placement units of its children.
-  // Never reference the unit itself (safety guard).
-  const childUnitsOf = new Map();
-  for (const u of units) {
-    const childUnits = [];
-    const seen = new Set();
-    for (const cid of u.children) {
-      const pid = placementOfPerson.get(cid);
-      if (!pid || pid === u.id) continue;
-      if (seen.has(pid)) continue;
-      seen.add(pid);
-      childUnits.push(pid);
-    }
-    childUnitsOf.set(u.id, childUnits);
-  }
-
-  // Root units = units whose members all have no parents in DB
-  // AND which are not children of some other unit.
-  const isChildUnit = new Set();
-  for (const u of units) for (const cu of childUnitsOf.get(u.id)) isChildUnit.add(cu);
-
-  const rootUnits = units.filter(u => !isChildUnit.has(u.id)
-    && u.members.every(mid => (parentOf.get(mid) || []).length === 0));
-
-  // Fallback: if no clear root (cyclic data), take units whose generation of
-  // first member is 0.
-  const effectiveRoots = rootUnits.length ? rootUnits
-    : units.filter(u => Math.min(...u.members.map(m => gen.get(m) ?? 0)) === 0);
 
   // --- recursive subtree width ----------------------------------------
-  const unitWidth = new Map(); // unitId -> width (px) of its sub-tree
-  function unitOwnWidth(u) {
-    if (u.members.length === 2) return NODE_W * 2 + COUPLE_GAP;
-    return NODE_W;
-  }
-  function computeSubtreeWidth(uid, visited = new Set()) {
-    if (visited.has(uid)) return unitOwnWidth(unitById.get(uid));
-    visited.add(uid);
-    const u = unitById.get(uid);
-    const own = unitOwnWidth(u);
-    const kids = childUnitsOf.get(uid);
+  // Width of a slot's subtree = max(slot own width, total child slots width)
+  const subtreeWidth = new Map();
+  function computeSubtreeWidth(a, visited = new Set()) {
+    if (visited.has(a)) return slotByAnchor.get(a).width;
+    visited.add(a);
+    const slot = slotByAnchor.get(a);
+    const kids = childSlotsOfAnchor.get(a) || [];
     if (!kids.length) {
-      unitWidth.set(uid, own);
-      return own;
+      subtreeWidth.set(a, slot.width);
+      return slot.width;
     }
-    let kidsWidth = 0;
+    let kidsW = 0;
     for (let i = 0; i < kids.length; i++) {
-      kidsWidth += computeSubtreeWidth(kids[i], visited);
-      if (i < kids.length - 1) kidsWidth += FAMILY_GAP;
+      kidsW += computeSubtreeWidth(kids[i], visited);
+      if (i < kids.length - 1) kidsW += FAMILY_GAP;
     }
-    const w = Math.max(own, kidsWidth);
-    unitWidth.set(uid, w);
+    const w = Math.max(slot.width, kidsW);
+    subtreeWidth.set(a, w);
     return w;
   }
-  for (const u of effectiveRoots) computeSubtreeWidth(u.id);
-  // orphan units (not reached by root walk) still need widths
-  for (const u of units) if (!unitWidth.has(u.id)) computeSubtreeWidth(u.id);
 
-  // --- place units top-down ------------------------------------------
-  // placement: unit centerX, unit topY
-  const unitPos = new Map();  // uid -> {cx, y}
+  // Root anchors = anchors whose parent isn't itself an anchor (no proper parent slot).
+  const rootAnchors = [];
+  for (const a of isAnchor) {
+    const pars = parentOf.get(a) || [];
+    const anchorParent = pars.find(x => isAnchor.has(x));
+    if (!anchorParent) rootAnchors.push(a);
+  }
+  // Order roots by birth-year.
+  rootAnchors.sort((x, y) => {
+    const bx = year(personById.get(x)?.birth_date) || '9999';
+    const by = year(personById.get(y)?.birth_date) || '9999';
+    return bx.localeCompare(by);
+  });
+
+  for (const r of rootAnchors) computeSubtreeWidth(r);
+  // Orphan anchors not reached by root walk:
+  for (const a of isAnchor) if (!subtreeWidth.has(a)) computeSubtreeWidth(a);
+
+  // --- place slots top-down -------------------------------------------
+  // Each slot has: anchorX, satelliteXs (one per satellite), y
+  const slotPos = new Map();   // anchorId -> {anchorCx, satelliteCxs: [], y}
 
   const marginL = 80, marginT = 80, marginB = 60, marginR = 80;
 
-  function layoutUnit(uid, cx, y, visited = new Set()) {
-    if (visited.has(uid)) return;
-    visited.add(uid);
-    unitPos.set(uid, { cx, y });
-    const kids = childUnitsOf.get(uid);
+  function layoutSlot(a, slotLeftX, y, visited = new Set()) {
+    if (visited.has(a)) return;
+    visited.add(a);
+    const slot = slotByAnchor.get(a);
+    const anchorCx = slotLeftX + NODE_W / 2;
+    const satCxs = [];
+    for (let i = 0; i < slot.satellites.length; i++) {
+      satCxs.push(slotLeftX + NODE_W + (i + 1) * MARRIAGE_GAP + i * NODE_W + NODE_W / 2);
+    }
+    slotPos.set(a, { anchorCx, satelliteCxs: satCxs, y, slotLeftX, width: slot.width });
+
+    // Place children in a row centered under the slot's "children-anchor-point".
+    // For a slot with multiple spouses that have children with the anchor,
+    // we group children by which spouse they share with. Each group goes under
+    // THAT pair's midpoint.
+    const kids = childSlotsOfAnchor.get(a) || [];
     if (!kids.length) return;
-    const kidWidths = kids.map(k => unitWidth.get(k) || NODE_W);
-    const totalKidsW = kidWidths.reduce((a, b) => a + b, 0) + FAMILY_GAP * Math.max(0, kids.length - 1);
-    let cursor = cx - totalKidsW / 2;
-    for (let i = 0; i < kids.length; i++) {
-      const kw = kidWidths[i];
-      const kcx = cursor + kw / 2;
-      const kgen = Math.max(...unitById.get(kids[i]).members.map(m => gen.get(m) ?? 0));
-      layoutUnit(kids[i], kcx, marginT + kgen * ROW_H, visited);
-      cursor += kw + FAMILY_GAP;
+
+    // Group kids by WHICH co-parent they share with the anchor.
+    // Child C has parents [pA, pB]. If pA is anchor, the "co-parent" is pB.
+    const byCoparent = new Map();  // coparentId or 'solo' -> [childAnchor]
+    for (const c of kids) {
+      const pars = parentOf.get(c) || [];
+      const other = pars.find(x => x !== a);
+      const key = other || 'solo';
+      if (!byCoparent.has(key)) byCoparent.set(key, []);
+      byCoparent.get(key).push(c);
+    }
+
+    // Each group needs a horizontal "drop anchor x" (midpoint between anchor
+    // and the co-parent, if co-parent is a satellite in this slot).
+    const groups = [];
+    for (const [cop, kidList] of byCoparent) {
+      let dropX = anchorCx;
+      if (cop !== 'solo') {
+        const satIdx = slot.satellites.indexOf(cop);
+        if (satIdx >= 0) {
+          dropX = (anchorCx + satCxs[satIdx]) / 2;
+        }
+      }
+      // group width = sum of child subtree widths + gaps
+      const widths = kidList.map(k => subtreeWidth.get(k) || NODE_W);
+      const totalW = widths.reduce((s, w) => s + w, 0) + FAMILY_GAP * Math.max(0, kidList.length - 1);
+      groups.push({ dropX, kids: kidList, widths, totalW });
+    }
+
+    // If multiple groups, lay them out side-by-side centered on their drop points,
+    // but shift them so they don't overlap.
+    // Sort by desired dropX.
+    groups.sort((x, y) => x.dropX - y.dropX);
+
+    // Compute each group's actual left starting x: center on dropX.
+    // Then if overlap with previous group's right edge, push right.
+    let prevRight = -Infinity;
+    for (const g of groups) {
+      let leftX = g.dropX - g.totalW / 2;
+      if (leftX < prevRight + FAMILY_GAP) leftX = prevRight + FAMILY_GAP;
+      g.leftX = leftX;
+      prevRight = leftX + g.totalW;
+    }
+
+    // Place children in each group.
+    for (const g of groups) {
+      let cursor = g.leftX;
+      for (let i = 0; i < g.kids.length; i++) {
+        const c = g.kids[i];
+        const cw = g.widths[i];
+        const cy = y + ROW_H;
+        layoutSlot(c, cursor, cy, visited);
+        cursor += cw + FAMILY_GAP;
+      }
     }
   }
 
   // Place roots left-to-right.
   let cursor = marginL;
-  const rootPlacements = [];
-  for (const u of effectiveRoots) {
-    const w = unitWidth.get(u.id) || NODE_W;
-    const cx = cursor + w / 2;
-    const g = Math.min(...u.members.map(m => gen.get(m) ?? 0));
-    rootPlacements.push({ uid: u.id, cx, y: marginT + g * ROW_H });
+  for (const r of rootAnchors) {
+    const w = subtreeWidth.get(r) || NODE_W;
+    const slotW = slotByAnchor.get(r).width;
+    const slotLeftX = cursor + (w - slotW) / 2;  // center the slot inside its subtree
+    layoutSlot(r, slotLeftX, marginT + (gen.get(r) ?? 0) * ROW_H);
     cursor += w + FAMILY_GAP;
   }
-  const placedVisited = new Set();
-  for (const rp of rootPlacements) layoutUnit(rp.uid, rp.cx, rp.y, placedVisited);
-  // ensure every unit got a position (orphans)
-  for (const u of units) {
-    if (unitPos.has(u.id)) continue;
-    const g = Math.min(...u.members.map(m => gen.get(m) ?? 0));
-    const w = unitWidth.get(u.id) || NODE_W;
-    const cx = cursor + w / 2;
-    unitPos.set(u.id, { cx, y: marginT + g * ROW_H });
-    cursor += w + FAMILY_GAP;
+  // Orphan anchors not placed (not reached from roots):
+  for (const a of isAnchor) {
+    if (slotPos.has(a)) continue;
+    const slot = slotByAnchor.get(a);
+    layoutSlot(a, cursor, marginT + (gen.get(a) ?? 0) * ROW_H);
+    cursor += slot.width + FAMILY_GAP;
   }
 
-  // --- derive node positions from unit placement ---------------------
-  // Priority: a person's position comes from their placement unit (where they
-  // appear as a parent — couple-unit or singleton). If someone appears only
-  // as a child, their position comes from their home unit's child-row (but
-  // we already placed child-units above through layoutUnit recursion using
-  // placement units of the child persons).
-
+  // --- derive node positions from slot placement ----------------------
   const nodes = [];
   const posById = new Map();
-  const placedPerson = new Set();
+  function makeNode(personId, x, y) {
+    const p = personById.get(personId);
+    if (!p) return null;
+    const n = { id: personId, person: p, x, y, w: NODE_W, h: NODE_H, cx: x + NODE_W / 2, cy: y + AVATAR_R };
+    nodes.push(n); posById.set(personId, n); return n;
+  }
 
-  for (const u of units) {
-    const pos = unitPos.get(u.id);
-    if (!pos) continue;
-    if (u.members.length === 2) {
-      const [a, b] = u.members;
-      // Spouse order: male on left (if gender set), else sort by birth-year desc
-      const pa = state.persons.find(p => p.id === a);
-      const pb = state.persons.find(p => p.id === b);
-      let left = pa, right = pb;
-      if (pa.gender === 'f' && pb.gender === 'm') { left = pb; right = pa; }
-      else if (pa.gender === pb.gender) {
-        const ya = parseInt(year(pa.birth_date), 10) || 9999;
-        const yb = parseInt(year(pb.birth_date), 10) || 9999;
-        if (yb < ya) { left = pb; right = pa; }
-      }
-      const leftX = pos.cx - (NODE_W + COUPLE_GAP) / 2 - NODE_W / 2;
-      const rightX = pos.cx + (NODE_W + COUPLE_GAP) / 2 - NODE_W / 2;
-      if (!placedPerson.has(left.id)) {
-        const n = { id: left.id, person: left, x: leftX, y: pos.y, w: NODE_W, h: NODE_H, cx: leftX + NODE_W / 2, cy: pos.y + AVATAR_R, unit: u.id };
-        nodes.push(n); posById.set(left.id, n); placedPerson.add(left.id);
-      }
-      if (!placedPerson.has(right.id)) {
-        const n = { id: right.id, person: right, x: rightX, y: pos.y, w: NODE_W, h: NODE_H, cx: rightX + NODE_W / 2, cy: pos.y + AVATAR_R, unit: u.id };
-        nodes.push(n); posById.set(right.id, n); placedPerson.add(right.id);
-      }
-    } else {
-      const m = u.members[0];
-      const p = state.persons.find(x => x.id === m);
-      if (!p) continue;
-      if (placedPerson.has(m)) continue;
-      const x = pos.cx - NODE_W / 2;
-      const n = { id: m, person: p, x, y: pos.y, w: NODE_W, h: NODE_H, cx: pos.cx, cy: pos.y + AVATAR_R, unit: u.id };
-      nodes.push(n); posById.set(m, n); placedPerson.add(m);
+  for (const [a, pos] of slotPos) {
+    makeNode(a, pos.anchorCx - NODE_W / 2, pos.y);
+    const slot = slotByAnchor.get(a);
+    for (let i = 0; i < slot.satellites.length; i++) {
+      const sid = slot.satellites[i];
+      makeNode(sid, pos.satelliteCxs[i] - NODE_W / 2, pos.y);
     }
   }
 
-  // Any person missed (shouldn't happen): drop into orphan row at the end.
+  // Any person not placed (true orphan — not anchor, not satellite, no spouse-anchor):
   let orphanCursor = cursor;
   for (const p of state.persons) {
-    if (placedPerson.has(p.id)) continue;
+    if (posById.has(p.id)) continue;
     const g = gen.get(p.id) ?? 0;
-    const n = { id: p.id, person: p, x: orphanCursor, y: marginT + g * ROW_H, w: NODE_W, h: NODE_H,
-      cx: orphanCursor + NODE_W / 2, cy: marginT + g * ROW_H + AVATAR_R, unit: null };
-    nodes.push(n); posById.set(p.id, n);
+    makeNode(p.id, orphanCursor, marginT + g * ROW_H);
     orphanCursor += NODE_W + FAMILY_GAP;
   }
 
   // --- edges ----------------------------------------------------------
-  // Spouse edges: horizontal connector + ❤ between the two circles.
-  // Parent edges: child drop-line (T) from parent/couple midpoint down.
   const links = [];
   for (const e of state.edges) {
     const a = posById.get(e.from_id), b = posById.get(e.to_id);
@@ -764,22 +771,24 @@ function computeLayout() {
     links.push({ e, a, b });
   }
 
-  // --- bounds ---------------------------------------------------------
-  const maxX = Math.max(...nodes.map(n => n.x + n.w));
+  // --- bounds + normalize ---------------------------------------------
   const minX = Math.min(...nodes.map(n => n.x));
+  const maxX = Math.max(...nodes.map(n => n.x + n.w));
   const maxY = Math.max(...nodes.map(n => n.y + n.h));
-
-  // Normalize so leftmost node sits at marginL
   const shift = marginL - minX;
   for (const n of nodes) { n.x += shift; n.cx += shift; }
-  for (const [, pos] of unitPos) pos.cx += shift;
+  for (const [, pos] of slotPos) {
+    pos.anchorCx += shift;
+    pos.satelliteCxs = pos.satelliteCxs.map(x => x + shift);
+    pos.slotLeftX += shift;
+  }
 
   const totalW = (maxX + shift) + marginR;
   const totalH = maxY + marginB;
 
   return {
     nodes, links, posById,
-    unitById, unitPos, childUnitsOf,
+    slotByAnchor, slotPos, childSlotsOfAnchor, satelliteOf, spouseEdges,
     totalW, totalH,
     marginL, marginT,
   };
@@ -829,7 +838,7 @@ function renderTree() {
     return;
   }
 
-  const { nodes, links, posById, unitById, unitPos, childUnitsOf, totalW, totalH, marginT } = state.layout;
+  const { nodes, links, posById, totalW, totalH, marginT } = state.layout;
 
   const canvas = document.getElementById('tree-canvas');
   const cw = canvas.clientWidth, ch = canvas.clientHeight;
@@ -894,24 +903,21 @@ function renderTree() {
     }
   }
 
-  // 1. Marriage/spouse edges: horizontal connector between the two spouse circles
-  //    + status glyph centered on the line. Only draw for couples we actually
-  //    placed next to each other (same unit, members.length === 2).
+  // 1. Satellite spouse edges — within each slot, horizontal line from anchor
+  //    through its satellites. Each (anchor, satellite_i) segment gets the
+  //    status glyph of that specific relationship.
+  const { slotByAnchor, slotPos, childSlotsOfAnchor, satelliteOf } = state.layout;
   const drawnCouples = new Set();
-  for (const u of unitById.values()) {
-    if (u.members.length !== 2) continue;
-    const [a, b] = u.members;
-    const na = posById.get(a), nb = posById.get(b);
-    if (!na || !nb) continue;
-    const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+  function drawSpouseSegment(leftNode, rightNode, edge) {
+    if (!leftNode || !rightNode || !edge) return;
+    const key = edge.from_id < edge.to_id ? `${edge.from_id}|${edge.to_id}` : `${edge.to_id}|${edge.from_id}`;
     drawnCouples.add(key);
-    const edge = spouseEdgeMap.get(key);
-    const status = edge?.status || 'married';
+    const status = edge.status || 'married';
     const glyph = marriageGlyph(status);
-    const y = na.y + AVATAR_R;
-    const xL = Math.min(na.cx, nb.cx) + AVATAR_R;
-    const xR = Math.max(na.cx, nb.cx) - AVATAR_R;
-    if (xR <= xL) continue;
+    const y = leftNode.y + AVATAR_R;
+    const xL = leftNode.cx + AVATAR_R;
+    const xR = rightNode.cx - AVATAR_R;
+    if (xR <= xL) return;
     const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
     line.setAttribute('x1', xL); line.setAttribute('x2', xR);
     line.setAttribute('y1', y);  line.setAttribute('y2', y);
@@ -929,14 +935,28 @@ function renderTree() {
       edgeG.appendChild(lbl);
     }
   }
+  for (const [anchorId, slot] of slotByAnchor) {
+    if (!slot.satellites.length) continue;
+    const anchorNode = posById.get(anchorId);
+    if (!anchorNode) continue;
+    let prev = anchorNode;
+    for (const satId of slot.satellites) {
+      const satNode = posById.get(satId);
+      if (!satNode) continue;
+      const k = anchorId < satId ? `${anchorId}|${satId}` : `${satId}|${anchorId}`;
+      const edge = spouseEdgeMap.get(k);
+      drawSpouseSegment(prev, satNode, edge);
+      prev = satNode;
+    }
+  }
 
-  // Draw spouse edges that are not in a placed couple (fallback: dashed arc).
+  // Draw spouse edges that are NOT in any slot (cross-tree ties between two
+  // anchors) — fallback dashed arc.
   for (const e of state.edges) {
     if (e.type !== 'spouse') continue;
-    const a = e.from_id, b = e.to_id;
-    const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+    const key = e.from_id < e.to_id ? `${e.from_id}|${e.to_id}` : `${e.to_id}|${e.from_id}`;
     if (drawnCouples.has(key)) continue;
-    const na = posById.get(a), nb = posById.get(b);
+    const na = posById.get(e.from_id), nb = posById.get(e.to_id);
     if (!na || !nb) continue;
     const status = e.status || 'married';
     const glyph = marriageGlyph(status);
@@ -959,44 +979,63 @@ function renderTree() {
     }
   }
 
-  // 2. Parent / child drop-lines (T-shape, right angles).
-  //    For each unit with children: compute parent anchor point (midpoint
-  //    between spouses just below their circles, or just below a singleton)
-  //    then a vertical to a horizontal "sibling bar" above the children row,
-  //    then short verticals down to each child's circle top.
-  const PARENT_STUB = 18;   // distance below the avatar before the drop begins
-  const CHILD_STUB = 18;    // distance above child circle before the horizontal bar
-  for (const u of unitById.values()) {
-    if (!u.children.length) continue;
-    const kids = u.children.map(id => posById.get(id)).filter(Boolean);
-    if (!kids.length) continue;
-    // Parent anchor: use the first placed member's row Y (both spouses share Y).
-    const anyMember = posById.get(u.members[0]);
-    if (!anyMember) continue;
-    const parentY = anyMember.y + AVATAR_R * 2;  // bottom of the circle
-    const parentCx = unitPos.get(u.id)?.cx ?? anyMember.cx;
-    // Children all share the same Y (same generation)
-    const childTopY = kids[0].y;
+  // 2. Parent/child drop-lines — group kids by (anchor, co-parent) pair.
+  //    Drop line comes from midpoint between anchor and the co-parent
+  //    (when co-parent is a satellite in the anchor's slot) or from anchor alone.
+  const PARENT_STUB = 18;
+  const CHILD_STUB = 18;
+
+  // Build (anchor, coparent) → [childNodes] groups.
+  const dropGroups = new Map();
+  for (const anchorId of slotByAnchor.keys()) {
+    const kids = childSlotsOfAnchor.get(anchorId) || [];
+    for (const c of kids) {
+      const pars = parentOfInLayout(c);
+      const other = pars.find(x => x !== anchorId);
+      const key = `${anchorId}|${other || ''}`;
+      if (!dropGroups.has(key)) dropGroups.set(key, { anchorId, coparentId: other || null, kids: [] });
+      dropGroups.get(key).kids.push(c);
+    }
+  }
+  function parentOfInLayout(childId) {
+    const edges = state.edges.filter(e => e.type === 'parent' && e.to_id === childId);
+    return edges.map(e => e.from_id);
+  }
+
+  for (const g of dropGroups.values()) {
+    const kidsNodes = g.kids.map(id => posById.get(id)).filter(Boolean);
+    if (!kidsNodes.length) continue;
+    const anchorNode = posById.get(g.anchorId);
+    if (!anchorNode) continue;
+    const parentY = anchorNode.y + AVATAR_R * 2;
+    const slot = slotByAnchor.get(g.anchorId);
+    const sPos = slotPos.get(g.anchorId);
+    let parentCx = anchorNode.cx;
+    if (g.coparentId && slot && sPos) {
+      const satIdx = slot.satellites.indexOf(g.coparentId);
+      if (satIdx >= 0) {
+        parentCx = (sPos.anchorCx + sPos.satelliteCxs[satIdx]) / 2;
+      }
+    }
+    const childTopY = kidsNodes[0].y;
     const barY = (parentY + PARENT_STUB + childTopY - CHILD_STUB) / 2;
 
-    // Drop from parent down to barY
+    // Drop from parent-midpoint down to barY
     const drop = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     drop.setAttribute('d', `M${parentCx},${parentY + 2} V${barY}`);
     drop.setAttribute('class', 'edge-parent');
     edgeG.appendChild(drop);
 
     // Horizontal sibling bar
-    const minCx = Math.min(parentCx, ...kids.map(k => k.cx));
-    const maxCx = Math.max(parentCx, ...kids.map(k => k.cx));
+    const minCx = Math.min(parentCx, ...kidsNodes.map(k => k.cx));
+    const maxCx = Math.max(parentCx, ...kidsNodes.map(k => k.cx));
     if (maxCx > minCx) {
       const bar = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       bar.setAttribute('d', `M${minCx},${barY} H${maxCx}`);
       bar.setAttribute('class', 'edge-parent');
       edgeG.appendChild(bar);
     }
-
-    // Vertical from bar down to each child's top
-    for (const kid of kids) {
+    for (const kid of kidsNodes) {
       const vert = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       vert.setAttribute('d', `M${kid.cx},${barY} V${kid.y - 2}`);
       vert.setAttribute('class', 'edge-parent');
@@ -1004,13 +1043,15 @@ function renderTree() {
     }
   }
 
-  // Parent edges that don't match any unit-child relation (single parents
-  // whose children are listed in another unit, cross-tree ties) — draw as
-  // a soft arc so they still show.
+  // Parent edges not drawn above (satellite → own child, or cross-tree):
+  // dashed arc.
   const drawnParent = new Set();
-  for (const u of unitById.values()) {
-    for (const cid of u.children) {
-      for (const m of u.members) drawnParent.add(`${m}|${cid}`);
+  for (const anchorId of slotByAnchor.keys()) {
+    const kids = childSlotsOfAnchor.get(anchorId) || [];
+    const slot = slotByAnchor.get(anchorId);
+    for (const c of kids) {
+      drawnParent.add(`${anchorId}|${c}`);
+      for (const s of slot.satellites) drawnParent.add(`${s}|${c}`);
     }
   }
   for (const e of state.edges) {
