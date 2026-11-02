@@ -69,7 +69,7 @@ für HTML-Scrapes, nie direkten `fetch`. `fetchPage` wählt Backend per Env:
 - `FIRECRAWL_URL` gesetzt → Scrape über Firecrawl-Self-Hosted (`/v1/scrape`, Playwright-Browser, umgeht IP-Blocks).
 - Sonst → direkter `httpGet` aus `http.js` (UA + Rate-Limit + Log).
 
-Umstellung auf Firecrawl = zwei .env-Zeilen plus `docker compose restart api`.
+Umstellung auf Firecrawl = zwei .env-Zeilen plus `docker compose up -d api`.
 Blockierte Scraper geben eine `needs_firecrawl: true`-Card zurück (keine Crashes),
 die nach Firecrawl-Aktivierung transparent zu echten Treffern wird.
 

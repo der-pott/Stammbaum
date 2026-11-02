@@ -73,7 +73,7 @@ export const SOURCES = {
   mastodon:      { label: 'Mastodon',                    impl: mastodon.search, active: true, note: 'nur Lebende / nach 1990' },
   // --- Deutsche Archive & Nachrufe (Firecrawl-ready) -----------------------
   zlb_adressbuecher:   { label: 'Berliner Adressbuecher 1799-1943 (ZLB)', impl: zlb_adressbuecher.search, active: true, note: 'nur bei Berlin-Bezug' },
-  landesarchiv_berlin: { label: 'Landesarchiv Berlin',                     impl: landesarchiv_berlin.search, active: true },
+  landesarchiv_berlin: { label: 'Landesarchiv Berlin',                     impl: landesarchiv_berlin.search, active: true, timeout: 75_000, note: 'Session-Suche, langsam (bis 60s)' },
   trauer:              { label: 'Trauer.de (Nachrufe)',                    impl: trauer.search, active: true, note: 'nur nach 1990' },
   gedenkseiten:        { label: 'Gedenkseiten.de',                         impl: gedenkseiten.search, active: true, note: 'nur nach 1990' },
   onlinegedenken:      { label: 'Online Gedenken',                         impl: onlinegedenken.search, active: true, note: 'nur nach 1990' },
@@ -102,7 +102,8 @@ async function callSource(key, person) {
   const src = SOURCES[key];
   if (!src) return { key, hits: [], status: 'unknown' };
   try {
-    const hits = await withTimeout(Promise.resolve().then(() => src.impl(person)), PER_SOURCE_TIMEOUT, key);
+    const timeout = src.timeout || PER_SOURCE_TIMEOUT;
+    const hits = await withTimeout(Promise.resolve().then(() => src.impl(person)), timeout, key);
     return { key, hits: (hits || []).map(h => ({ ...h, source: h.source || key })), status: 'done' };
   } catch (err) {
     return { key, hits: [], status: 'failed', error: err?.message || String(err) };
