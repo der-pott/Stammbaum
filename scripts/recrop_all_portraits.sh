@@ -20,7 +20,11 @@ for p in ps:
   | while IFS='|' read -r PID NAME; do
       TMPIN=$(mktemp -t portin.XXXXXX).jpg
       TMPOUT=$(mktemp -t portout.XXXXXX).jpg
-      ssh vps "docker exec stammbaum-api cat /data/images.backup-20261102/images/$PID" > "$TMPIN" 2>/dev/null
+      # WICHTIG: KEIN ssh -n hier. Vorher: `ssh -n ... < /dev/null` oder `ssh -n` LEERTE
+      # beim nächsten Push-Call stdin → der Push-cat kam leer an und schrieb 0-Byte-Files.
+      # Fix: < /dev/null auf den pull-Call setzen (ssh ohne -n), damit der read-Loop
+      # weiterhin aus /tmp/portraits.lst speisen kann.
+      ssh vps "docker exec stammbaum-api cat /data/images.backup-20261102/images/$PID" < /dev/null > "$TMPIN" 2>/dev/null
       if [ ! -s "$TMPIN" ]; then
         echo "SKIP $NAME ($PID): kein Backup"
         rm -f "$TMPIN" "$TMPOUT"
@@ -30,7 +34,10 @@ for p in ps:
         "$TMPIN" "$TMPOUT" --size 1200 2>&1 | sed "s/^/[$NAME] /"
       SZ=$(stat -f %z "$TMPOUT")
       cat "$TMPOUT" | ssh vps "docker exec -i stammbaum-api sh -c 'cat > /data/images/$PID'"
-      ssh vps "docker exec stammbaum-api node -e \"require('better-sqlite3')('/data/stammbaum.db').prepare('UPDATE images SET mime=?, bytes=? WHERE id=?').run('image/jpeg', $SZ, '$PID')\"" 2>/dev/null
+      ssh vps "docker exec stammbaum-api node -e \"require('better-sqlite3')('/data/stammbaum.db').prepare('UPDATE images SET mime=?, bytes=? WHERE id=?').run('image/jpeg', $SZ, '$PID')\"" < /dev/null 2>/dev/null
+      # Sanity check: wenn remote bytes != lokal → push ist fehlgeschlagen
+      REMOTE_SZ=$(ssh vps "docker exec stammbaum-api stat -c %s /data/images/$PID" < /dev/null)
+      [ "$SZ" != "$REMOTE_SZ" ] && echo "  WARN: remote=$REMOTE_SZ ≠ lokal=$SZ"
       echo "  → bytes=$SZ"
       rm -f "$TMPIN" "$TMPOUT"
     done
