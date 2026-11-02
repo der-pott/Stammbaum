@@ -225,11 +225,68 @@ function fmtLifeShort(p) {
 function fmtPlace(p) {
   return [p.birth_place, p.death_place].filter(Boolean)[0] || '';
 }
-function fmtDate(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (isNaN(d)) return iso;
-  return d.toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' });
+
+/* --- German date I/O ------------------------------------------------ */
+// Normalise "21071983" / "210783" / "21-07-1983" / "21/7/83" into "21.07.1983".
+// Already-German ("21.07.1983") passes through. Free text ("Sommer 1983",
+// "ca. 1941", "um 1900") is left untouched.
+function parseGermanDate(raw) {
+  if (!raw) return raw;
+  const s = String(raw).trim();
+  if (!s) return s;
+  if (/^\d{2}\.\d{2}\.\d{4}$/.test(s)) return s;
+  const digitsOnly = /^\d+$/.test(s);
+  if (digitsOnly && s.length === 8) {
+    return `${s.slice(0, 2)}.${s.slice(2, 4)}.${s.slice(4, 8)}`;
+  }
+  if (digitsOnly && s.length === 6) {
+    const dd = s.slice(0, 2), mm = s.slice(2, 4), yy = parseInt(s.slice(4, 6), 10);
+    const thisYY = new Date().getFullYear() % 100;
+    const yyyy = yy <= thisYY ? 2000 + yy : 1900 + yy;
+    return `${dd}.${mm}.${yyyy}`;
+  }
+  const m = s.match(/^(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{2,4})$/);
+  if (m) {
+    const dd = m[1].padStart(2, '0');
+    const mm = m[2].padStart(2, '0');
+    let yyyy = m[3];
+    if (yyyy.length === 2) {
+      const yy = parseInt(yyyy, 10);
+      yyyy = String(yy <= new Date().getFullYear() % 100 ? 2000 + yy : 1900 + yy);
+    }
+    return `${dd}.${mm}.${yyyy}`;
+  }
+  return raw;
+}
+
+// For display: ISO "1941-07-21" → "21.07.1941"; already-German passes through;
+// free text passes through.
+function fmtDateDisplay(raw) {
+  if (!raw) return '';
+  const s = String(raw).trim();
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return `${iso[3]}.${iso[2]}.${iso[1]}`;
+  return s;
+}
+
+// Legacy name retained for callers; now defers to fmtDateDisplay.
+function fmtDate(raw) { return fmtDateDisplay(raw); }
+
+// Wire blur-handlers on date-shaped inputs inside a form or dialog.
+function wireDateInputs(root) {
+  if (!root) return;
+  root.querySelectorAll('input').forEach(inp => {
+    const name = inp.getAttribute('name') || '';
+    if (!/date|^date$|^year$|since|until|start|end/i.test(name)) return;
+    const t = (inp.getAttribute('type') || 'text').toLowerCase();
+    if (t !== 'text' && t !== '') return;
+    inp.setAttribute('placeholder', 'TT.MM.JJJJ');
+    inp.setAttribute('inputmode', 'numeric');
+    inp.addEventListener('blur', () => {
+      const parsed = parseGermanDate(inp.value);
+      if (parsed !== inp.value) inp.value = parsed;
+    });
+  });
 }
 function escapeHtml(s) { return (s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function h(tag, attrs = {}, ...kids) {
@@ -303,11 +360,46 @@ function select(id) {
 // Node dimensions for the dynasty-chart layout: round avatar + name/dates underneath.
 const NODE_W = 128;    // card width (avatar centered)
 const AVATAR_R = 36;   // circular portrait radius
-const NODE_H = 150;    // avatar + name + dates
+const NODE_H = 150;    // avatar + name + dates (base; wrapped names may extend further)
 const SIBLING_GAP = 16;
 const COUPLE_GAP = 56;  // ❤-filled gap between spouses
 const FAMILY_GAP = 56;  // between adjacent sibling groups
-const ROW_H = 220;      // vertical gap between generations
+const ROW_H = 260;      // vertical gap between generations (room for 2–3 wrapped name lines)
+const NAME_WRAP_W = NODE_W + 24;   // max width per node name block
+const NAME_LINE_H = 15;             // px per wrapped name line (font-size 13 + leading)
+
+// Simple word-wrap using the existing text-metrics cache.
+// Falls back to hard character-split for a single word longer than maxWidth.
+function wrapText(str, maxWidth, font = '600 13px "Instrument Sans", sans-serif') {
+  if (!str) return [''];
+  const words = String(str).split(/\s+/);
+  const lines = [];
+  let cur = '';
+  for (const w of words) {
+    const test = cur ? cur + ' ' + w : w;
+    if (measureText(test, font) <= maxWidth) {
+      cur = test;
+    } else {
+      if (cur) lines.push(cur);
+      if (measureText(w, font) > maxWidth) {
+        let piece = '';
+        for (const ch of w) {
+          if (measureText(piece + ch, font) > maxWidth) {
+            if (piece) lines.push(piece);
+            piece = ch;
+          } else {
+            piece += ch;
+          }
+        }
+        cur = piece;
+      } else {
+        cur = w;
+      }
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines.length ? lines : [''];
+}
 
 function computeLayout() {
   if (!state.persons.length) return null;
@@ -951,15 +1043,28 @@ function renderTree() {
     ring.setAttribute('class', 'node-ring');
     g.appendChild(ring);
 
-    // Name
+    // Name (wrapped — center-aligned, one tspan per line).
     const nmText = primaryNameOf(n.person);
-    const nameT = textEl(NODE_W / 2, AVATAR_R * 2 + 24, nmText, { anchor: 'middle', cls: 'node-name' });
+    const nameLines = wrapText(nmText, NAME_WRAP_W);
+    const nameT = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    nameT.setAttribute('x', NODE_W / 2);
+    nameT.setAttribute('y', AVATAR_R * 2 + 18);
+    nameT.setAttribute('text-anchor', 'middle');
+    nameT.setAttribute('class', 'node-name');
+    for (let i = 0; i < nameLines.length; i++) {
+      const ts = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+      ts.setAttribute('x', NODE_W / 2);
+      if (i > 0) ts.setAttribute('dy', NAME_LINE_H);
+      ts.textContent = nameLines[i];
+      nameT.appendChild(ts);
+    }
     g.appendChild(nameT);
 
-    // Dates
+    // Dates — positioned below the wrapped name block.
     const dates = fmtLifeShort(n.person);
     if (dates) {
-      const dT = textEl(NODE_W / 2, AVATAR_R * 2 + 42, dates, { anchor: 'middle', cls: 'node-dates' });
+      const dy = AVATAR_R * 2 + 18 + nameLines.length * NAME_LINE_H + 2;
+      const dT = textEl(NODE_W / 2, dy, dates, { anchor: 'middle', cls: 'node-dates' });
       g.appendChild(dT);
     }
 
@@ -995,8 +1100,8 @@ function showNodeHover(n) {
   const el = document.getElementById('tree-hover');
   const p = n.person;
   const bits = [];
-  if (p.birth_date) bits.push(`* ${p.birth_date}${p.birth_place ? ', ' + p.birth_place : ''}`);
-  if (p.death_date) bits.push(`✝ ${p.death_date}${p.death_place ? ', ' + p.death_place : ''}`);
+  if (p.birth_date) bits.push(`* ${fmtDateDisplay(p.birth_date)}${p.birth_place ? ', ' + p.birth_place : ''}`);
+  if (p.death_date) bits.push(`✝ ${fmtDateDisplay(p.death_date)}${p.death_place ? ', ' + p.death_place : ''}`);
   el.innerHTML = '';
   el.appendChild(h('h4', {}, fullNameOf(p)));
   for (const b of bits) el.appendChild(h('div', { class: 'meta' }, b));
@@ -1139,12 +1244,12 @@ function renderDetail() {
   if (p.birth_date || p.death_date || p.birth_place || p.death_place) {
     el.appendChild(h('div', { class: 'lifespan' },
       h('div', { class: 'born' },
-        h('b', {}, p.birth_date || '?'),
+        h('b', {}, p.birth_date ? fmtDateDisplay(p.birth_date) : '?'),
         p.birth_place ? h('small', {}, 'geboren in ' + p.birth_place) : null,
       ),
       h('div', { class: 'arc' }, p.death_date ? '→' : 'lebt'),
       h('div', { class: 'died' },
-        p.death_date ? h('b', {}, p.death_date) : h('b', {}, '—'),
+        p.death_date ? h('b', {}, fmtDateDisplay(p.death_date)) : h('b', {}, '—'),
         p.death_place ? h('small', {}, 'gestorben in ' + p.death_place) : null,
       ),
     ));
@@ -1366,11 +1471,14 @@ async function loadSub(kind, personId, body, renderOne) {
   }
 }
 
+function fmtRange(a, b) {
+  return [a, b].filter(Boolean).map(fmtDateDisplay).join(' – ');
+}
 function renderJob(j) {
   return h('div', { class: 'sub-row' },
     h('div', { class: 'sub-title' }, j.title || 'Beruf'),
     h('div', { class: 'sub-sub' }, [j.employer, j.place].filter(Boolean).join(' · ')),
-    h('div', { class: 'sub-range' }, [j.start_date, j.end_date].filter(Boolean).join(' – ')),
+    h('div', { class: 'sub-range' }, fmtRange(j.start_date, j.end_date)),
     j.notes ? h('div', { class: 'sub-note' }, j.notes) : null,
   );
 }
@@ -1378,7 +1486,7 @@ function renderResidence(r) {
   return h('div', { class: 'sub-row' },
     h('div', { class: 'sub-title' }, r.place),
     h('div', { class: 'sub-sub' }, r.kind || ''),
-    h('div', { class: 'sub-range' }, [r.start_date, r.end_date].filter(Boolean).join(' – ')),
+    h('div', { class: 'sub-range' }, fmtRange(r.start_date, r.end_date)),
     r.notes ? h('div', { class: 'sub-note' }, r.notes) : null,
   );
 }
@@ -1386,7 +1494,7 @@ function renderMilitary(m) {
   return h('div', { class: 'sub-row' },
     h('div', { class: 'sub-title' }, [m.branch, m.rank].filter(Boolean).join(' · ') || 'Militär'),
     h('div', { class: 'sub-sub' }, [m.unit, m.campaigns].filter(Boolean).join(' · ')),
-    h('div', { class: 'sub-range' }, [m.start_date, m.end_date].filter(Boolean).join(' – ')),
+    h('div', { class: 'sub-range' }, fmtRange(m.start_date, m.end_date)),
     m.notes ? h('div', { class: 'sub-note' }, m.notes) : null,
   );
 }
@@ -1400,7 +1508,7 @@ function renderAnecdote(a) {
 function renderHealth(e) {
   return h('div', { class: 'sub-row' },
     h('div', { class: 'sub-title' }, e.condition),
-    h('div', { class: 'sub-sub' }, [e.date, e.hereditary ? 'erblich' : null].filter(Boolean).join(' · ')),
+    h('div', { class: 'sub-sub' }, [fmtDateDisplay(e.date), e.hereditary ? 'erblich' : null].filter(Boolean).join(' · ')),
     e.notes ? h('div', { class: 'sub-note' }, e.notes) : null,
   );
 }
@@ -1410,7 +1518,7 @@ const SUB_FIELDS = {
     { name: 'title',      label: 'Position',   type: 'text' },
     { name: 'employer',   label: 'Arbeitgeber', type: 'text' },
     { name: 'place',      label: 'Ort',         type: 'text' },
-    { name: 'start_date', label: 'von',         type: 'text', placeholder: 'JJJJ oder JJJJ-MM-TT' },
+    { name: 'start_date', label: 'von',         type: 'text', placeholder: 'TT.MM.JJJJ' },
     { name: 'end_date',   label: 'bis',         type: 'text' },
     { name: 'notes',      label: 'Notiz',       type: 'textarea' },
   ],
@@ -1463,6 +1571,7 @@ function openSubDialog(kind, personId, existing = null) {
     if (f.required) input.setAttribute('required', '');
     if (isEdit && existing[f.name] != null) {
       if (f.type === 'checkbox') input.checked = !!Number(existing[f.name]);
+      else if (/date|_at$|^date$|since|until|start|end/i.test(f.name)) input.value = fmtDateDisplay(existing[f.name]);
       else input.value = existing[f.name];
     }
     wrap.appendChild(input);
@@ -1477,6 +1586,9 @@ function openSubDialog(kind, personId, existing = null) {
     ev.preventDefault();
     const data = Object.fromEntries(new FormData(form));
     for (const f of fields) if (f.type === 'checkbox') data[f.name] = form.querySelector(`[name="${f.name}"]`).checked ? '1' : '';
+    for (const [k, v] of Object.entries(data)) {
+      if (/date|_at$|^date$|since|until|start|end/i.test(k)) data[k] = parseGermanDate(v);
+    }
     try {
       if (isEdit) await api.updateSub(personId, kind, existing.id, data);
       else await api.createSub(personId, kind, data);
@@ -1484,6 +1596,7 @@ function openSubDialog(kind, personId, existing = null) {
       renderDetail();
     } catch (e) { alert('Fehler: ' + e.message); }
   };
+  wireDateInputs(form);
   dlg.showModal();
 }
 function createSubDialog() {
@@ -1722,8 +1835,8 @@ function renderHit(hit, personId) {
 
 function fmtMarriage(s) {
   const parts = [];
-  if (s.since) parts.push(`⚭ ${year(s.since) || s.since}`);
-  if (s.until) parts.push(`⚮ ${year(s.until) || s.until}`);
+  if (s.since) parts.push(`⚭ ${year(s.since) || fmtDateDisplay(s.since)}`);
+  if (s.until) parts.push(`⚮ ${year(s.until) || fmtDateDisplay(s.until)}`);
   return parts.join(' · ');
 }
 
@@ -2019,10 +2132,18 @@ function openPersonDialog(p = null) {
   const dlg = document.getElementById('person-dialog');
   const form = document.getElementById('person-form');
   document.getElementById('person-dialog-title').textContent = p ? 'Person bearbeiten' : 'Neue Person';
-  for (const f of form.elements) if (f.name) f.value = p?.[f.name] ?? '';
+  for (const f of form.elements) {
+    if (!f.name) continue;
+    const raw = p?.[f.name] ?? '';
+    // Preload existing ISO dates in German display form so the user doesn't see 1941-07-21.
+    f.value = /date|_at$/i.test(f.name) ? fmtDateDisplay(raw) : raw;
+  }
   form.onsubmit = async (ev) => {
     ev.preventDefault();
     const data = Object.fromEntries(new FormData(form));
+    for (const [k, v] of Object.entries(data)) {
+      if (/date|_at$/i.test(k)) data[k] = parseGermanDate(v);
+    }
     try {
       if (p) await api.update(p.id, data);
       else {
@@ -2033,6 +2154,7 @@ function openPersonDialog(p = null) {
       await reload();
     } catch (e) { alert('Fehler: ' + e.message); }
   };
+  wireDateInputs(form);
   dlg.showModal();
 }
 
@@ -2054,8 +2176,8 @@ function openEdgeDialog(existing = null) {
     form.to_id.value = existing.to_id;
     form.to_id.disabled = true;
     if (form.status) form.status.value = existing.status || 'married';
-    if (form.since)  form.since.value  = existing.since  || '';
-    if (form.until)  form.until.value  = existing.until  || '';
+    if (form.since)  form.since.value  = fmtDateDisplay(existing.since) || '';
+    if (form.until)  form.until.value  = fmtDateDisplay(existing.until) || '';
   } else {
     form.type.disabled = false;
     form.from_id.disabled = false;
@@ -2071,6 +2193,9 @@ function openEdgeDialog(existing = null) {
   form.onsubmit = async (ev) => {
     ev.preventDefault();
     const data = Object.fromEntries(new FormData(form));
+    for (const [k, v] of Object.entries(data)) {
+      if (/since|until/i.test(k)) data[k] = parseGermanDate(v);
+    }
     try {
       if (isEdit) {
         // Only mutate status/since/until on existing edges — endpoints restrict others.
@@ -2093,6 +2218,7 @@ function openEdgeDialog(existing = null) {
       await reload();
     } catch (e) { alert('Fehler: ' + e.message); }
   };
+  wireDateInputs(form);
   dlg.showModal();
 }
 

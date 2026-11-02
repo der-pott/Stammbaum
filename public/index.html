@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&display=swap">
-  <link rel="stylesheet" href="styles.css?v=17">
+  <link rel="stylesheet" href="styles.css?v=18">
 </head>
 <body>
 
@@ -139,9 +139,9 @@
           <option value="x">divers</option>
         </select>
       </label>
-      <label class="field"><span>Geboren</span><input name="birth_date" placeholder="JJJJ-MM-TT oder frei"></label>
+      <label class="field"><span>Geboren</span><input name="birth_date" placeholder="TT.MM.JJJJ"></label>
       <label class="field"><span>Geburtsort</span><input name="birth_place"></label>
-      <label class="field"><span>Gestorben</span><input name="death_date" placeholder="JJJJ-MM-TT oder frei"></label>
+      <label class="field"><span>Gestorben</span><input name="death_date" placeholder="TT.MM.JJJJ"></label>
       <label class="field"><span>Sterbeort</span><input name="death_place"></label>
     </div>
     <label class="field"><span>Notizen</span><textarea name="notes" rows="3" maxlength="500"></textarea></label>
@@ -176,8 +176,8 @@
         </select>
       </label>
       <div class="grid-2">
-        <label class="field"><span>Seit</span><input name="since" placeholder="JJJJ-MM-TT oder frei"></label>
-        <label class="field"><span>Bis / Ende</span><input name="until" placeholder="JJJJ-MM-TT oder frei"></label>
+        <label class="field"><span>Seit</span><input name="since" placeholder="TT.MM.JJJJ"></label>
+        <label class="field"><span>Bis / Ende</span><input name="until" placeholder="TT.MM.JJJJ"></label>
       </div>
     </div>
     <menu class="dlg-actions">
@@ -236,6 +236,6 @@
   <div class="lightbox-caption" id="lightbox-caption"></div>
 </div>
 
-<script src="stammbaum.js?v=18" defer></script>
+<script src="stammbaum.js?v=19" defer></script>
 </body>
 </html>
