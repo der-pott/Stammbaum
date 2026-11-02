@@ -16,7 +16,10 @@ def crop(in_path: str, out_path: str, size: int = 1200) -> dict:
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     cascade_path = pathlib.Path(cv2.data.haarcascades) / 'haarcascade_frontalface_default.xml'
     cascade = cv2.CascadeClassifier(str(cascade_path))
-    faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
+    # Mindest-Face = 8% der kleineren Bildseite — ignoriert Hintergrund-Gesichter
+    # auf Gruppenfotos. Für 5712x3213 wären das 257px, nicht 60px.
+    min_px = max(60, int(min(h, w) * 0.08))
+    faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(min_px, min_px))
 
     if len(faces) == 0:
         # Fallback: center-crop auf Quadrat
@@ -30,11 +33,17 @@ def crop(in_path: str, out_path: str, size: int = 1200) -> dict:
         x, y, fw, fh = max(faces, key=lambda f: f[2]*f[3])
         cx = x + fw / 2
         cy = y + fh / 2
-        # Enges Portrait: Gesicht ca. 60% der Höhe (padding factor 1.6).
-        # Grund: viele Vorlagen haben am Rand noch Lochverstärkungen, Rahmen,
-        # Hintergrund-Dreck. Tightly auf Gesicht+Hals/Schultern zu croppen hält
-        # das meiste davon außerhalb.
-        box_size = max(fw, fh) * 1.65
+        # Dynamisches Padding: enges Portrait wenn Face groß (viel vom Bild);
+        # großzügiger wenn Face klein (Gruppenfoto / Person im Kontext) damit
+        # genug Pixel bleiben und kein brutaler Upscale nötig wird.
+        face_px = max(fw, fh)
+        if face_px >= 800:
+            padding = 1.65    # face dominiert Bild → eng
+        elif face_px >= 400:
+            padding = 2.0     # mittelgroß
+        else:
+            padding = 3.0     # Gruppenfoto → mehr Kontext für genug Pixel
+        box_size = face_px * padding
         half = box_size / 2
         # Nach oben leicht shiften (Haar/Stirn): 4% der Box
         shift_up = box_size * 0.04
@@ -51,12 +60,17 @@ def crop(in_path: str, out_path: str, size: int = 1200) -> dict:
         x2 = min(w, x1 + side)
         y2 = min(h, y1 + side)
         crop_img = img[y1:y2, x1:x2]
-        method = f'face-crop (face {fw}x{fh} bei {x},{y}, padding 1.65x)'
+        method = f'face-crop (face {fw}x{fh} bei {x},{y}, padding {padding}x)'
 
-    # Resize auf Zielgröße
-    crop_img = cv2.resize(crop_img, (size, size), interpolation=cv2.INTER_AREA)
+    # Kein Upscale über die native Crop-Größe hinaus. Max target_size, aber nie
+    # größer als die kleinere Seite des Crops.
+    crop_h, crop_w = crop_img.shape[:2]
+    out_size = min(size, crop_h, crop_w)
+    if out_size < size:
+        method += f' (kein Upscale, nativ {out_size}px)'
+    crop_img = cv2.resize(crop_img, (out_size, out_size), interpolation=cv2.INTER_AREA)
     cv2.imwrite(out_path, crop_img, [cv2.IMWRITE_JPEG_QUALITY, 88])
-    return {'method': method, 'out_size': (size, size), 'orig_size': (w, h)}
+    return {'method': method, 'out_size': (out_size, out_size), 'orig_size': (w, h)}
 
 
 if __name__ == '__main__':
