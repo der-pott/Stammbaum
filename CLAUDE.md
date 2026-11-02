@@ -75,3 +75,9 @@ die nach Firecrawl-Aktivierung transparent zu echten Treffern wird.
 
 JSON-APIs (DNB SRU, CrossRef, OpenLibrary, Wikidata, Europeana, Mastodon) nutzen
 `fetchJson()` und laufen immer direkt — Firecrawl ist nur für HTML-Scrape-Blocker.
+
+## KI-Update-Button pro Person
+
+Jedes Dossier hat einen **✨ KI-Update** Action-Button (nur Editor). Klick ruft `POST /api/persons/:id/ai-review` auf → Backend sammelt alle Daten der Person via `gatherBioContext` plus Namensregister aller anderen Personen, lässt Claude Opus 4.7 die Freitext-Felder analysieren und bekommt JSON-Vorschläge in 7 Buckets zurück: `new_persons`, `new_edges`, `new_residences`, `residence_updates`, `job_updates`, `field_updates`, `contradictions`.
+
+Vorschläge werden in `ai_reviews` Tabelle gespeichert. UI zeigt Review-Modal mit Checkbox pro Vorschlag (contradictions nur info, nicht anwendbar). User wählt + klickt „Übernehmen" → `POST /api/ai-reviews/:review_id/apply` wendet selektierte Vorschläge als Transaktion an. **Nichts** wird automatisch gespeichert — jeder Vorschlag muss vom Menschen bestätigt werden.

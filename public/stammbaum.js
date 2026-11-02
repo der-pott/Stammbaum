@@ -65,6 +65,12 @@ const api = {
   async makeBio(person_id) {
     return j(await fetch(`/api/persons/${person_id}/biography`, { method: 'POST' }));
   },
+  async aiReview(person_id) {
+    return j(await fetch(`/api/persons/${person_id}/ai-review`, { method: 'POST' }));
+  },
+  async aiReviewApply(review_id, accepted) {
+    return j(await fetch(`/api/ai-reviews/${review_id}/apply`, postJson({ accepted })));
+  },
   async listSub(person_id, kind) {
     return j(await fetch(`/api/persons/${person_id}/${kind}`));
   },
@@ -1656,6 +1662,7 @@ function renderDetail() {
   if (state.role === 'editor') {
     const actions = h('div', { class: 'actions' });
     actions.appendChild(btnOutline('Bearbeiten', () => openPersonDialog(p)));
+    actions.appendChild(btnOutline('✨ KI-Update', () => openAiReviewDialog(p.id)));
     actions.appendChild(btnOutline('📎 Dokument', () => openImageUpload(p.id)));
     actions.appendChild(btnOutline('Löschen', async () => {
       if (!confirm(`${nameOf(p)} löschen?`)) return;
@@ -2967,3 +2974,136 @@ function wireCropHandlers() {
     openLoginDialog();
   }
 })();
+
+/* --- KI-Update Dialog ------------------------------------------------- */
+const _aiReview = { reviewId: null, suggestions: null, personId: null };
+
+async function openAiReviewDialog(personId) {
+  const dlg = document.getElementById('ai-review-dialog');
+  const body = document.getElementById('ai-review-body');
+  const applyBtn = document.getElementById('ai-review-apply');
+  _aiReview.reviewId = null;
+  _aiReview.suggestions = null;
+  _aiReview.personId = personId;
+  applyBtn.disabled = true;
+  body.innerHTML = '<div class="ai-loading"><span class="ai-spinner"></span> Analysiere… (5–20 Sek)</div>';
+  wireAiReviewHandlers();
+  dlg.showModal();
+  try {
+    const result = await api.aiReview(personId);
+    _aiReview.reviewId = result.review_id;
+    _aiReview.suggestions = result.suggestions;
+    renderAiReviewSuggestions(result.suggestions);
+    applyBtn.disabled = false;
+  } catch (e) {
+    body.innerHTML = `<div class="ai-error">Fehler: ${escapeHtml(e.message || String(e))}</div>`;
+  }
+}
+
+const AI_BUCKETS = [
+  { key: 'new_persons',       title: 'Neue Personen',          empty: 'Keine neuen Personen erkannt.' },
+  { key: 'new_edges',         title: 'Neue Beziehungen',       empty: 'Keine neuen Beziehungen erkannt.' },
+  { key: 'new_residences',    title: 'Neue Wohnorte',          empty: 'Keine neuen Wohnorte erkannt.' },
+  { key: 'residence_updates', title: 'Wohnort-Ergänzungen',    empty: 'Keine Wohnort-Ergänzungen.' },
+  { key: 'job_updates',       title: 'Beruf-Ergänzungen',      empty: 'Keine Beruf-Ergänzungen.' },
+  { key: 'field_updates',     title: 'Feld-Normalisierungen',  empty: 'Keine Feld-Vorschläge.' },
+  { key: 'contradictions',    title: 'Widersprüche (nur Info)', empty: 'Keine Widersprüche.' },
+];
+
+function renderAiReviewSuggestions(s) {
+  const body = document.getElementById('ai-review-body');
+  body.innerHTML = '';
+  let totalCount = 0;
+  for (const b of AI_BUCKETS) {
+    const items = Array.isArray(s[b.key]) ? s[b.key] : [];
+    const section = h('div', { class: 'ai-section', 'data-bucket': b.key });
+    section.appendChild(h('h3', { class: 'ai-section-title' }, `${b.title} (${items.length})`));
+    if (!items.length) {
+      section.appendChild(h('div', { class: 'ai-empty' }, b.empty));
+    } else {
+      const list = h('div', { class: 'ai-list' });
+      items.forEach((item, idx) => {
+        const row = h('label', { class: 'ai-row' });
+        const checkbox = h('input', { type: 'checkbox', 'data-bucket': b.key, 'data-idx': String(idx) });
+        if (b.key !== 'contradictions') checkbox.checked = true;
+        else checkbox.disabled = true;
+        row.appendChild(checkbox);
+        row.appendChild(renderAiItem(b.key, item));
+        list.appendChild(row);
+        totalCount++;
+      });
+      section.appendChild(list);
+    }
+    body.appendChild(section);
+  }
+  if (totalCount === 0) {
+    body.insertAdjacentHTML('afterbegin', '<div class="ai-empty-all">Keine Vorschläge — die Daten sind sauber.</div>');
+  }
+}
+
+function renderAiItem(bucket, item) {
+  const wrap = h('div', { class: 'ai-item' });
+  const hint = item.source_hint || item.note || '';
+  if (bucket === 'new_persons') {
+    const nm = [item.given_name, item.surname].filter(Boolean).join(' ');
+    const dates = [item.birth_date && `*${item.birth_date}`, item.death_date && `†${item.death_date}`].filter(Boolean).join(', ');
+    wrap.appendChild(h('div', { class: 'ai-title' }, nm + (item.birth_name ? ` (geb. ${item.birth_name})` : '')));
+    wrap.appendChild(h('div', { class: 'ai-sub' }, [dates, item.birth_place, item.gender].filter(Boolean).join(' · ')));
+  } else if (bucket === 'new_edges') {
+    const type = item.type === 'parent' ? 'Eltern-Kind' : `Ehe (${item.status || 'married'})`;
+    const to = item.to_person_id ? '→ ID ' + item.to_person_id.slice(0, 8) :
+      (item.to_hint ? '→ ' + ([item.to_hint.given_name, item.to_hint.surname].filter(Boolean).join(' ')) : '');
+    wrap.appendChild(h('div', { class: 'ai-title' }, `${type} ${to}`));
+  } else if (bucket === 'new_residences') {
+    const parts = [item.street, item.postal_code, item.city, item.district && `(${item.district})`].filter(Boolean).join(' ');
+    wrap.appendChild(h('div', { class: 'ai-title' }, parts || item.place || 'Wohnort'));
+    wrap.appendChild(h('div', { class: 'ai-sub' }, [item.region, item.country].filter(Boolean).join(' · ')));
+  } else if (bucket === 'residence_updates' || bucket === 'job_updates') {
+    const patchStr = Object.entries(item.patch || {}).map(([k, v]) => `${k}: ${v}`).join(', ');
+    wrap.appendChild(h('div', { class: 'ai-title' }, patchStr));
+    wrap.appendChild(h('div', { class: 'ai-sub' }, 'Eintrag: ' + (item.entry_id || '').slice(0, 8)));
+  } else if (bucket === 'field_updates') {
+    wrap.appendChild(h('div', { class: 'ai-title' }, `${item.field}: ${item.current || '—'} → ${item.suggested}`));
+    if (item.reason) wrap.appendChild(h('div', { class: 'ai-sub' }, item.reason));
+  } else if (bucket === 'contradictions') {
+    wrap.appendChild(h('div', { class: 'ai-title' }, item.what || ''));
+    if (item.note) wrap.appendChild(h('div', { class: 'ai-sub' }, item.note));
+  }
+  if (hint && bucket !== 'contradictions' && bucket !== 'field_updates') {
+    wrap.appendChild(h('div', { class: 'ai-hint' }, hint));
+  }
+  return wrap;
+}
+
+let _aiReviewHandlersWired = false;
+function wireAiReviewHandlers() {
+  if (_aiReviewHandlersWired) return;
+  _aiReviewHandlersWired = true;
+  document.getElementById('ai-review-cancel').onclick = () => document.getElementById('ai-review-dialog').close();
+  document.getElementById('ai-review-apply').onclick = async (ev) => {
+    const btn = ev.currentTarget;
+    const body = document.getElementById('ai-review-body');
+    if (!_aiReview.reviewId) return;
+    const accepted = {};
+    for (const b of AI_BUCKETS) {
+      if (b.key === 'contradictions') continue;
+      accepted[b.key] = Array.from(body.querySelectorAll(`input[data-bucket="${b.key}"]:checked`))
+        .map(c => parseInt(c.getAttribute('data-idx'), 10));
+    }
+    btn.disabled = true;
+    btn.textContent = 'Übernehme…';
+    try {
+      const result = await api.aiReviewApply(_aiReview.reviewId, accepted);
+      document.getElementById('ai-review-dialog').close();
+      await reload();
+      renderDetail();
+      const msg = `${result.applied} von ${result.requested} angewendet` + (result.errors?.length ? `, ${result.errors.length} Fehler` : '');
+      alert(msg);
+    } catch (e) {
+      alert('Fehler: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Übernehmen';
+    }
+  };
+}

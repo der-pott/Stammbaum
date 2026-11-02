@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&display=swap">
-  <link rel="stylesheet" href="styles.css?v=26">
+  <link rel="stylesheet" href="styles.css?v=27">
 </head>
 <body>
 
@@ -253,6 +253,21 @@
   </menu>
 </dialog>
 
+<!-- KI-Update Dialog -->
+<dialog id="ai-review-dialog" class="dlg dlg-ai-review" aria-label="KI-Vorschläge">
+  <div class="ai-review-head">
+    <h2 class="dlg-title">KI-Vorschläge</h2>
+    <p class="dlg-sub">Prüfe die Ergänzungen und übernimm nur die passenden. Nichts wird automatisch gespeichert.</p>
+  </div>
+  <div id="ai-review-body" class="ai-review-body">
+    <div class="ai-loading"><span class="ai-spinner"></span> Analysiere…</div>
+  </div>
+  <menu class="dlg-actions">
+    <button type="button" class="btn-ghost" id="ai-review-cancel">Abbrechen</button>
+    <button type="button" class="btn-primary" id="ai-review-apply" disabled>Übernehmen</button>
+  </menu>
+</dialog>
+
 <!-- Lightbox -->
 <div id="lightbox" class="lightbox" hidden role="dialog" aria-modal="true" aria-label="Dokument-Vollansicht">
   <button class="lightbox-close icon-btn" id="lightbox-close" aria-label="Schließen">
@@ -270,6 +285,6 @@
   <div class="lightbox-caption" id="lightbox-caption"></div>
 </div>
 
-<script src="stammbaum.js?v=35" defer></script>
+<script src="stammbaum.js?v=36" defer></script>
 </body>
 </html>

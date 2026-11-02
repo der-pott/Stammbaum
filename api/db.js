@@ -202,6 +202,17 @@ db.exec(`
     duration_ms INTEGER,
     error       TEXT
   );
+
+  CREATE TABLE IF NOT EXISTS ai_reviews (
+    id          TEXT PRIMARY KEY,
+    person_id   TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    suggestions TEXT NOT NULL,
+    status      TEXT NOT NULL CHECK (status IN ('pending','partially_applied','done','dismissed')),
+    model       TEXT,
+    created_at  TEXT NOT NULL,
+    applied_at  TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_reviews_person ON ai_reviews(person_id, created_at);
 `);
 
 // Idempotente Migration: Spalte in bestehender Tabelle anlegen falls fehlt.

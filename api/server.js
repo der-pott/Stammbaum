@@ -10,6 +10,7 @@ import {
 } from './db.js';
 import { createAnthropicClient, runResearch } from './research.js';
 import { generateBiography } from './biography.js';
+import { runReview } from './ai_review.js';
 import { listSources, runSingleSource, SOURCES } from './research_dispatch.js';
 import { startWorker, enqueueJob, getJob } from './scrape_worker.js';
 import { computeConsensus } from './consensus.js';
@@ -740,6 +741,195 @@ app.post('/api/persons/:id/biography', requireEditor, aiLimiter, async (req, res
     logAudit(req.auth.role, 'bio.fail', req.params.id);
     res.status(502).json({ error: err?.message || 'biography generation failed' });
   }
+});
+
+/* AI-Review ------------------------------------------------------------ */
+
+// Analyse: liest Daten + Namensregister, baut Vorschläge, speichert in ai_reviews.
+app.post('/api/persons/:id/ai-review', requireEditor, aiLimiter, async (req, res) => {
+  if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY nicht gesetzt' });
+  const ctx = gatherBioContext(req.params.id);
+  if (!ctx) return res.status(404).json({ error: 'person not found' });
+  // Namensregister aller anderen Personen für ID-Lookup
+  const register = db.prepare(`SELECT id, given_name, surname, birth_name, birth_date
+    FROM persons WHERE id != ? ORDER BY surname, given_name`).all(req.params.id);
+  try {
+    const result = await runReview(anthropic, ctx, register);
+    const now = nowIso();
+    const reviewId = newId();
+    db.prepare(`INSERT INTO ai_reviews (id, person_id, suggestions, status, model, created_at)
+      VALUES (?,?,?,?,?,?)`)
+      .run(reviewId, req.params.id, JSON.stringify(result.suggestions), 'pending', result.model, now);
+    logAudit(req.auth.role, 'ai_review.generate', req.params.id);
+    res.json({ review_id: reviewId, person_id: req.params.id, suggestions: result.suggestions, model: result.model, created_at: now, usage: result.usage });
+  } catch (err) {
+    logAudit(req.auth.role, 'ai_review.fail', req.params.id);
+    console.error('ai-review error:', err?.message, err?.raw ? '— raw:' + err.raw.slice(0, 500) : '');
+    res.status(502).json({ error: err?.message || 'ai-review failed' });
+  }
+});
+
+// Apply: wendet selektierte Vorschläge an. Body: { accepted: { new_persons: [idx...], ... } }
+app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
+  const row = db.prepare('SELECT * FROM ai_reviews WHERE id=?').get(req.params.review_id);
+  if (!row) return res.status(404).json({ error: 'review not found' });
+  if (row.status === 'done' || row.status === 'dismissed') {
+    return res.status(409).json({ error: `review already ${row.status}` });
+  }
+  let suggestions;
+  try { suggestions = JSON.parse(row.suggestions); }
+  catch { return res.status(500).json({ error: 'stored suggestions corrupt' }); }
+
+  const accepted = req.body?.accepted || {};
+  const personId = row.person_id;
+  const now = nowIso();
+  const errors = [];
+  let applied = 0;
+
+  // Map from "new_persons index" → resolved new id (für Edges die auf einen frisch angelegten Vorschlag zeigen)
+  const newPersonIds = new Map();
+
+  const tx = db.transaction(() => {
+    // 1) new_persons
+    for (const idx of (accepted.new_persons || [])) {
+      const p = suggestions.new_persons?.[idx];
+      if (!p || !p.given_name || !p.surname) { errors.push({ bucket: 'new_persons', idx, error: 'invalid vorschlag' }); continue; }
+      const id = newId();
+      try {
+        db.prepare(`INSERT INTO persons (id, given_name, surname, birth_name, nicknames, gender, birth_date, birth_place, death_date, death_place, notes, created_at, updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+          .run(id, p.given_name, p.surname, p.birth_name || null, null, p.gender || null,
+               p.birth_date || null, p.birth_place || null, p.death_date || null, p.death_place || null,
+               p.notes || null, now, now);
+        newPersonIds.set(idx, id);
+        logAudit(req.auth.role, 'ai_review.apply.person', `${row.id} new=${id}`);
+        applied++;
+      } catch (e) {
+        errors.push({ bucket: 'new_persons', idx, error: e.message });
+      }
+    }
+
+    // 2) new_edges
+    for (const idx of (accepted.new_edges || [])) {
+      const e = suggestions.new_edges?.[idx];
+      if (!e || !e.type || !['parent','spouse'].includes(e.type)) { errors.push({ bucket: 'new_edges', idx, error: 'invalid type' }); continue; }
+      const resolve = (field) => {
+        const idVal = e[field];
+        if (idVal === null || idVal === undefined || idVal === '' || idVal === 'this') return personId;
+        if (idVal) {
+          const chk = db.prepare('SELECT id FROM persons WHERE id=?').get(idVal);
+          if (chk) return chk.id;
+        }
+        return null;
+      };
+      let fromId = resolve('from_person_id');
+      let toId = resolve('to_person_id');
+      // from/to-Hints: via name_register oder newPersonIds-Index
+      const applyHint = (hint) => {
+        if (!hint) return null;
+        if (hint.new_person_idx !== undefined && newPersonIds.has(hint.new_person_idx)) return newPersonIds.get(hint.new_person_idx);
+        if (hint.given_name && hint.surname) {
+          const match = db.prepare('SELECT id FROM persons WHERE given_name=? AND surname=? LIMIT 1')
+            .get(hint.given_name, hint.surname);
+          if (match) return match.id;
+        }
+        return null;
+      };
+      if (!fromId) fromId = applyHint(e.from_hint);
+      if (!toId) toId = applyHint(e.to_hint);
+      if (!fromId || !toId) { errors.push({ bucket: 'new_edges', idx, error: 'from/to id not resolvable' }); continue; }
+      if (fromId === toId) { errors.push({ bucket: 'new_edges', idx, error: 'self-edge' }); continue; }
+      try {
+        const edgeId = newId();
+        const edgeStatus = e.type === 'spouse' ? (e.status || 'married') : null;
+        db.prepare(`INSERT INTO edges (id, from_id, to_id, type, since, until, status, created_at)
+          VALUES (?,?,?,?,?,?,?,?)`)
+          .run(edgeId, fromId, toId, e.type, e.since || null, e.until || null, edgeStatus, now);
+        applied++;
+      } catch (e2) {
+        errors.push({ bucket: 'new_edges', idx, error: e2.message });
+      }
+    }
+
+    // 3) new_residences
+    for (const idx of (accepted.new_residences || [])) {
+      const r = suggestions.new_residences?.[idx];
+      if (!r) { errors.push({ bucket: 'new_residences', idx, error: 'missing' }); continue; }
+      try {
+        const id = newId();
+        db.prepare(`INSERT INTO residences (id, person_id, place, street, city, district, postal_code, postal_code_historical, region, country, start_date, end_date, kind, notes, created_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+          .run(id, personId, r.place || r.city || null, r.street || null, r.city || null, r.district || null,
+               r.postal_code || null, r.postal_code_historical || null, r.region || null, r.country || 'Deutschland',
+               r.start_date || null, r.end_date || null, r.kind || null, r.notes || null, now);
+        applied++;
+      } catch (e) {
+        errors.push({ bucket: 'new_residences', idx, error: e.message });
+      }
+    }
+
+    // 4) residence_updates
+    for (const idx of (accepted.residence_updates || [])) {
+      const u = suggestions.residence_updates?.[idx];
+      if (!u?.entry_id || !u.patch) { errors.push({ bucket: 'residence_updates', idx, error: 'incomplete' }); continue; }
+      const allowed = ['place','street','city','district','postal_code','postal_code_historical','region','country','start_date','end_date','kind','notes'];
+      const fields = Object.keys(u.patch).filter(k => allowed.includes(k));
+      if (!fields.length) { errors.push({ bucket: 'residence_updates', idx, error: 'no valid fields' }); continue; }
+      const setStr = fields.map(f => `${f}=?`).join(', ');
+      const vals = fields.map(f => u.patch[f]);
+      try {
+        const r = db.prepare(`UPDATE residences SET ${setStr} WHERE id=? AND person_id=?`).run(...vals, u.entry_id, personId);
+        if (r.changes) applied++;
+        else errors.push({ bucket: 'residence_updates', idx, error: 'row not found' });
+      } catch (e) {
+        errors.push({ bucket: 'residence_updates', idx, error: e.message });
+      }
+    }
+
+    // 5) job_updates
+    for (const idx of (accepted.job_updates || [])) {
+      const u = suggestions.job_updates?.[idx];
+      if (!u?.entry_id || !u.patch) { errors.push({ bucket: 'job_updates', idx, error: 'incomplete' }); continue; }
+      const allowed = ['title','employer','start_date','end_date','place','notes'];
+      const fields = Object.keys(u.patch).filter(k => allowed.includes(k));
+      if (!fields.length) { errors.push({ bucket: 'job_updates', idx, error: 'no valid fields' }); continue; }
+      const setStr = fields.map(f => `${f}=?`).join(', ');
+      const vals = fields.map(f => u.patch[f]);
+      try {
+        const r = db.prepare(`UPDATE jobs SET ${setStr} WHERE id=? AND person_id=?`).run(...vals, u.entry_id, personId);
+        if (r.changes) applied++;
+        else errors.push({ bucket: 'job_updates', idx, error: 'row not found' });
+      } catch (e) {
+        errors.push({ bucket: 'job_updates', idx, error: e.message });
+      }
+    }
+
+    // 6) field_updates
+    for (const idx of (accepted.field_updates || [])) {
+      const u = suggestions.field_updates?.[idx];
+      const allowed = ['given_name','surname','birth_name','nicknames','gender','birth_date','birth_place','death_date','death_place','notes'];
+      if (!u?.field || !allowed.includes(u.field) || u.suggested === undefined) { errors.push({ bucket: 'field_updates', idx, error: 'invalid field' }); continue; }
+      try {
+        db.prepare(`UPDATE persons SET ${u.field}=?, updated_at=? WHERE id=?`).run(u.suggested, now, personId);
+        applied++;
+      } catch (e) {
+        errors.push({ bucket: 'field_updates', idx, error: e.message });
+      }
+    }
+  });
+
+  try { tx(); }
+  catch (txErr) {
+    logAudit(req.auth.role, 'ai_review.apply.fail', `${row.id} ${txErr.message}`);
+    return res.status(500).json({ error: 'transaction failed: ' + txErr.message, applied: 0, errors });
+  }
+
+  // Status: wenn alles akzeptiert ohne Fehler → done, sonst partially_applied
+  const total = Object.values(accepted).reduce((s, arr) => s + (Array.isArray(arr) ? arr.length : 0), 0);
+  const newStatus = applied === 0 ? 'pending' : (errors.length ? 'partially_applied' : 'done');
+  db.prepare(`UPDATE ai_reviews SET status=?, applied_at=? WHERE id=?`).run(newStatus, now, row.id);
+  logAudit(req.auth.role, 'ai_review.apply', `${row.id} applied=${applied} errors=${errors.length}`);
+  res.json({ review_id: row.id, applied, requested: total, errors, status: newStatus });
 });
 
 /* research hits + sources ---------------------------------------------- */
