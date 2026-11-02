@@ -505,6 +505,7 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
 }
 .dossier-section .section-head h3 { margin: 0; flex: 1; }
 .dossier-section .sub-add { margin-left: auto; }
+.dossier-section .sub-hint { font-size: 12px; color: var(--ink-faint); margin: -4px 0 var(--sp-3); font-style: italic; }
 
 .badge {
   display: inline-block;

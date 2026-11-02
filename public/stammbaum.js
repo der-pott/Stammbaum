@@ -1328,9 +1328,18 @@ function renderDetail() {
     el.appendChild(subSection('health-events', 'Gesundheit & Erbliches', p.id, renderHealth, { confidential: true, collapsed: true }));
   }
 
-  // ---- Dokumente ----------------------------------------------------
+  // ---- Dokumente & Fotos --------------------------------------------
+  const docHead = h('div', { class: 'section-head' },
+    h('h3', {}, 'Dokumente & Fotos'),
+  );
+  if (state.role === 'editor') {
+    const uploadBtn = h('button', { class: 'btn-ghost sub-add' }, '+ Bild');
+    uploadBtn.onclick = () => openImageUpload(p.id);
+    docHead.appendChild(uploadBtn);
+  }
   const docSection = h('div', { class: 'section dossier-section' },
-    h('h3', {}, 'Dokumente & Urkunden'),
+    docHead,
+    h('div', { class: 'meta sub-hint' }, 'Urkunden, Fotos und Portraits. Mit ☆ ein Bild zum Profilbild machen.'),
     h('div', { class: 'image-grid', id: 'image-grid-' + p.id }, h('div', { class: 'meta' }, 'Lade…')),
   );
   el.appendChild(docSection);
@@ -1975,19 +1984,29 @@ function openImageUpload(personId) {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = 'image/*,application/pdf';
+  input.multiple = true;
   input.onchange = async () => {
-    const file = input.files?.[0];
-    if (!file) return;
-    const caption = prompt(`Beschreibung für "${file.name}" (optional):`, file.name) ?? '';
-    const role = prompt('Art des Dokuments (z. B. Heiratsurkunde, Geburtsurkunde, Foto):', '') ?? '';
-    try {
-      const img = await api.uploadImage(file, caption);
-      await api.linkImage(personId, img.id, role || null);
-      const grid = document.getElementById('image-grid-' + personId);
-      if (grid) await loadImagesInto(personId, grid);
-    } catch (e) {
-      alert('Upload fehlgeschlagen: ' + e.message);
+    const files = Array.from(input.files || []);
+    if (!files.length) return;
+    const caption = files.length === 1
+      ? prompt(`Beschreibung für "${files[0].name}" (optional):`, files[0].name) ?? ''
+      : '';
+    const role = prompt('Art (Foto, Portrait, Heiratsurkunde, Geburtsurkunde, Sterbeurkunde, Dokument):', 'Foto') ?? 'Foto';
+    const grid = document.getElementById('image-grid-' + personId);
+    for (const file of files) {
+      try {
+        const cap = files.length === 1 ? caption : file.name;
+        const img = await api.uploadImage(file, cap);
+        await api.linkImage(personId, img.id, role || 'Foto');
+        if (role === 'Portrait') {
+          await api.setPortrait(personId, img.id);
+        }
+      } catch (e) {
+        alert(`Upload fehlgeschlagen (${file.name}): ${e.message}`);
+      }
     }
+    if (grid) await loadImagesInto(personId, grid);
+    await reload();
   };
   input.click();
 }
