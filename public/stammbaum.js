@@ -727,7 +727,7 @@ function computeLayout() {
     const shift = targetCx - anchorMid;
 
     for (let i = 0; i < kids.length; i++) {
-      const cy = y + ROW_H;
+      const cy = marginT + (gen.get(kids[i]) ?? 0) * ROW_H;
       layoutSlot(kids[i], childLefts[i] + shift, cy, visited);
     }
   }
