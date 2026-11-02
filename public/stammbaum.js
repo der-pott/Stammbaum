@@ -433,6 +433,33 @@ function wrapText(str, maxWidth, font = '600 13px "Instrument Sans", sans-serif'
   return lines.length ? lines : [''];
 }
 
+// Layout invariants (must hold after every computeLayout() run):
+//
+//   1. Non-Overlap. No two node bboxes (circle + name/date label block)
+//      intersect. Enforced by (a) reserving each child's FULL subtree width
+//      — not just its own slot width — when allocating sibling slots in a
+//      row, and (b) the collision guard at the end which surfaces regressions
+//      via console + UI badge.
+//
+//   2. Child-Centered. Each child slot's anchor cx lies inside the sibling
+//      group centered on the parent-couple's midpoint. A per-slot `shift`
+//      moves the whole kids row so the group center meets the parents'
+//      target cx.
+//
+//   3. Monotone Y. gen(node_N).y < gen(node_N+1).y (we use a fixed ROW_H).
+//
+//   4. Family Clustering. Siblings sit next to each other, separated only
+//      by SIBLING_GAP. Different root families get FAMILY_GAP between them.
+//
+//   5. Upstream couples (parent-couple inserted directly above a single
+//      child via marital-anchor rule) must fit at child.cx without colliding
+//      with existing gen N-1 nodes. If they don't, we try a modest lateral
+//      shift (≤ COUPLE_W_EFF) and otherwise fall back to a dashed
+//      cross-tree arc. The spouse line between the two parents stays SOLID
+//      in that fallback (their relationship is explicit).
+//
+// A regression test in `scripts/test_layout_overlaps.js` loads the live tree
+// and asserts invariant 1 holds for the real data.
 function computeLayout() {
   if (!state.persons.length) return null;
 
@@ -896,17 +923,23 @@ function computeLayout() {
     const kids = childSlotsOfAnchor.get(a) || [];
     if (!kids.length) return;
 
-    // Place child slots sequentially left-to-right (slot.leftX of next
-    // follows slot.rightX of previous + SIBLING_GAP). Each child slot may
-    // have left-sats, so its anchor sits at child.slotLeftX + child.anchorOffset.
+    // Place child slots sequentially left-to-right. Each child reserves its
+    // FULL SUBTREE WIDTH, not just its own slot width — otherwise a wide
+    // child subtree (e.g. a child with many grandchildren) overlaps the next
+    // sibling's slot. The child's own slot is centered inside the subtree
+    // reservation so its anchor cx lands at `childLeft + subtreeW/2 + offset`.
     const childLefts = [];
+    const childSlotLefts = [];     // left edge of the SLOT itself (centered in subtree)
     const childAnchorCxs = [];
     let cursor = 0;
     for (const c of kids) {
       const cSlot = slotByAnchor.get(c);
+      const cSubW = subtreeWidth.get(c) || cSlot.width;
       childLefts.push(cursor);
-      childAnchorCxs.push(cursor + cSlot.anchorOffset);
-      cursor += cSlot.width + SIBLING_GAP;
+      const cSlotLeft = cursor + (cSubW - cSlot.width) / 2;
+      childSlotLefts.push(cSlotLeft);
+      childAnchorCxs.push(cSlotLeft + cSlot.anchorOffset);
+      cursor += cSubW + SIBLING_GAP;
     }
 
     // Drop target: center of (anchor, bio co-parent) if co-parent sits in
@@ -934,7 +967,9 @@ function computeLayout() {
 
     for (let i = 0; i < kids.length; i++) {
       const cy = marginT + (gen.get(kids[i]) ?? 0) * ROW_H;
-      layoutSlot(kids[i], childLefts[i] + shift, cy, visited);
+      // Hand the SLOT-left (not the subtree-left) to the child layout, since
+      // the child's placeSlotAt reasons about its own slot box.
+      layoutSlot(kids[i], childSlotLefts[i] + shift, cy, visited);
     }
   }
 
@@ -972,14 +1007,29 @@ function computeLayout() {
     }
   }
 
-  // Any person not placed (true orphan — not anchor, not satellite, no spouse-anchor):
-  let orphanCursor = cursor;
+  // Any person not placed (true orphan — not anchor, not satellite, no
+  // spouse-anchor) is tucked past the right edge of all regular slots on
+  // their own y row (one row per gen). The orphan cursor is reset per-row
+  // and starts safely past the maximum x used by regular nodes in that row.
+  // Prevents orphans from drifting into populated subtree rows.
+  const maxXByY = new Map();
+  for (const n of nodes) {
+    const prev = maxXByY.get(n.y) || 0;
+    if (n.x + n.w > prev) maxXByY.set(n.y, n.x + n.w);
+  }
+  const orphanCursorByY = new Map();
   for (const p of state.persons) {
     if (posById.has(p.id)) continue;
     if (upstreamParentIds.has(p.id)) continue;   // upstream parents are placed later above their child
     const g = gen.get(p.id) ?? 0;
-    makeNode(p.id, orphanCursor, marginT + g * ROW_H);
-    orphanCursor += NODE_W + FAMILY_GAP;
+    const y = marginT + g * ROW_H;
+    const base = (maxXByY.get(y) || cursor) + FAMILY_GAP;
+    const x = orphanCursorByY.get(y) ?? base;
+    makeNode(p.id, x, y);
+    const next = x + NODE_W + FAMILY_GAP;
+    orphanCursorByY.set(y, next);
+    // keep the row-max in sync so later orphans on the same row stack
+    maxXByY.set(y, Math.max(maxXByY.get(y) || 0, x + NODE_W));
   }
 
   // --- edges ----------------------------------------------------------
@@ -1051,10 +1101,19 @@ function computeLayout() {
     }
     return false;
   }
-  const skippedUpstream = new Set();   // couple-child IDs that fell back to dashed arc
+  // Also remember spouse edgeKeys of all "wanted" upstream couples (even the
+  // ones we end up skipping). The renderer uses this set to keep the spouse
+  // line between those two parents SOLID instead of the usual dashed
+  // cross-tree arc — their relationship is explicit, not inferred.
+  const wantedUpstreamSpouseKeys = new Set(toPlace.map(t => t.uc.edgeKey));
+  const skippedUpstream = new Set();
   for (const t of toPlace) {
     let cx = t.idealCx;
     if (hasOverlap(cx, t.y)) {
+      // Try a lateral shift within one COUPLE_W_EFF. More aggressive shifts
+      // (moving neighboring subtrees out of the way) introduced new overlaps
+      // because sibling slots in the same row can't be moved independently
+      // without re-layouting their own couple/children spacing.
       const ranges = occupiedRanges(t.y);
       let best = null;
       for (const r of ranges) {
@@ -1065,7 +1124,6 @@ function computeLayout() {
           }
         }
       }
-      // Give up if the shift would be absurd.
       if (!best || best.dist > COUPLE_W_EFF) {
         skippedUpstream.add(t.childId);
         continue;
@@ -1097,13 +1155,19 @@ function computeLayout() {
       const uc = upstreamCouples.get(childId);  // deleted above, so this is null
       void uc;
     }
-    // Second-pass orphan placement for anyone still missing from nodes.
+    // Second-pass orphan placement for anyone still missing from nodes
+    // (uses the per-row cursor from the main orphan pass).
     for (const p of state.persons) {
       if (posById.has(p.id)) continue;
       if (upstreamParentIds.has(p.id)) continue;
       const g = gen.get(p.id) ?? 0;
-      makeNode(p.id, orphanCursor, marginT + g * ROW_H);
-      orphanCursor += NODE_W + FAMILY_GAP;
+      const y = marginT + g * ROW_H;
+      const base = (maxXByY.get(y) || cursor) + FAMILY_GAP;
+      const x = orphanCursorByY.get(y) ?? base;
+      makeNode(p.id, x, y);
+      const next = x + NODE_W + FAMILY_GAP;
+      orphanCursorByY.set(y, next);
+      maxXByY.set(y, Math.max(maxXByY.get(y) || 0, x + NODE_W));
     }
   }
 
@@ -1166,6 +1230,7 @@ function computeLayout() {
     slotByAnchor, slotPos, childSlotsOfAnchor, satelliteOf, spouseEdges,
     forcedSatelliteOf, parentOf, primaryPartnerOf,
     upstreamNodes, upstreamSpouseKeys, upstreamParentEdgeKeys,
+    wantedUpstreamSpouseKeys,
     overlaps,
     totalW, totalH,
     marginL, marginT,
@@ -1362,8 +1427,12 @@ function renderTree() {
   }
 
   // Draw spouse edges that are NOT in any slot (cross-tree ties between two
-  // anchors) — fallback dashed arc.
+  // anchors) — fallback dashed arc. BUT: when the pair is a *wanted* upstream
+  // couple that we couldn't place inline (both parentless, married, single
+  // shared child), draw the spouse line as SOLID — their relationship is
+  // explicit, not an inferred cross-tree tie.
   const upstreamSpouseKeys = state.layout?.upstreamSpouseKeys || new Set();
+  const wantedUpstreamSpouseKeys = state.layout?.wantedUpstreamSpouseKeys || new Set();
   for (const e of state.edges) {
     if (e.type !== 'spouse') continue;
     const key = e.from_id < e.to_id ? `${e.from_id}|${e.to_id}` : `${e.to_id}|${e.from_id}`;
@@ -1378,7 +1447,9 @@ function renderTree() {
     const mx = (na.cx + nb.cx) / 2;
     const my = (y1 + y2) / 2 - 30;
     path.setAttribute('d', `M${na.cx},${y1} Q${mx},${my} ${nb.cx},${y2}`);
-    path.setAttribute('class', `edge-spouse-remote status-${status}`);
+    const solid = wantedUpstreamSpouseKeys.has(key);
+    path.setAttribute('class', solid ? `edge-spouse status-${status}` : `edge-spouse-remote status-${status}`);
+    if (solid) path.setAttribute('fill', 'none');
     edgeG.appendChild(path);
     if (status === 'divorced') {
       drawDivorceSlashes(edgeG, mx, my, -10);
