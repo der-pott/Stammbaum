@@ -368,7 +368,17 @@ const ROW_H = 260;      // vertical gap between generations (room for 2–3 wrap
 const NAME_WRAP_W = NODE_W + 24;   // max width per node name block
 const NAME_LINE_H = 15;             // px per wrapped name line (font-size 13 + leading)
 
-// Simple word-wrap using the existing text-metrics cache.
+// Text-metrics cache for SVG wrap.
+const _measureCanvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(400, 50)
+  : (typeof document !== 'undefined' ? document.createElement('canvas') : null);
+const _measureCtx = _measureCanvas?.getContext ? _measureCanvas.getContext('2d') : null;
+function measureText(str, font = '600 13px "Instrument Sans", sans-serif') {
+  if (!_measureCtx) return (str || '').length * 7;
+  _measureCtx.font = font;
+  return _measureCtx.measureText(str || '').width;
+}
+
+// Simple word-wrap using the text-metrics cache.
 // Falls back to hard character-split for a single word longer than maxWidth.
 function wrapText(str, maxWidth, font = '600 13px "Instrument Sans", sans-serif') {
   if (!str) return [''];
