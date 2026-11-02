@@ -271,6 +271,52 @@ for (const [col, type] of resMigrations) {
   }
 }
 
+// --- Date-Precision-Flags (additiv, bestehende Werte unangetastet) ----
+// EXACT | MONTH | YEAR | APPROXIMATE | RANGE | UNKNOWN. Default EXACT.
+const DATE_PRECISION_TABLES = [
+  ['persons',          ['birth_date', 'death_date']],
+  ['residences',       ['start_date', 'end_date']],
+  ['jobs',             ['start_date', 'end_date']],
+  ['education',        ['start_date', 'end_date']],
+  ['military_service', ['start_date', 'end_date']],
+  ['health_events',    ['date']],
+];
+for (const [table, fields] of DATE_PRECISION_TABLES) {
+  const cols = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name));
+  for (const f of fields) {
+    const col = `${f}_precision`;
+    if (!cols.has(col)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} TEXT DEFAULT 'EXACT'`);
+    }
+  }
+}
+
+// --- Soft-Delete-Spalten auf allen User-Daten-Tabellen ---------------
+const SOFT_DELETE_TABLES = [
+  'persons', 'edges', 'residences', 'jobs', 'education',
+  'military_service', 'health_events', 'anecdotes', 'images', 'person_images',
+];
+for (const table of SOFT_DELETE_TABLES) {
+  const cols = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name));
+  if (!cols.has('deleted_at')) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN deleted_at TEXT`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_live ON ${table}(deleted_at)`);
+  }
+  if (!cols.has('deleted_by')) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN deleted_by TEXT`);
+  }
+}
+
+// --- Plausibility-Dismissals: User markiert Issue als "ist OK" ---------
+db.exec(`
+  CREATE TABLE IF NOT EXISTS plausibility_dismissals (
+    issue_key   TEXT PRIMARY KEY,
+    note        TEXT,
+    dismissed_at TEXT NOT NULL,
+    dismissed_by TEXT
+  );
+`);
+
 export function nowIso() { return new Date().toISOString(); }
 export function newId()  { return randomUUID(); }
 

@@ -340,6 +340,61 @@ function toIsoDate(raw) {
 // Legacy name retained for callers; now defers to fmtDateDisplay.
 function fmtDate(raw) { return fmtDateDisplay(raw); }
 
+// --- Date Precision helpers --------------------------------------------
+// Detect precision + extract a canonical date string from freetext input.
+// Returns {date, precision} where precision in EXACT|MONTH|YEAR|APPROXIMATE|RANGE|UNKNOWN.
+function detectDatePrecision(raw) {
+  if (!raw) return { date: raw, precision: 'EXACT' };
+  const s = String(raw).trim();
+  if (!s) return { date: s, precision: 'EXACT' };
+  // "ca. 1920", "um 1920", "etwa 1920" → APPROXIMATE
+  const approxMatch = s.match(/^(?:ca\.?|um|etwa|around|about)\s*(.+)$/i);
+  if (approxMatch) {
+    const inner = parseGermanDate(approxMatch[1].trim());
+    return { date: inner, precision: 'APPROXIMATE' };
+  }
+  // "1920-1925" or "1920–1925" → RANGE
+  if (/^\d{4}\s*[-–]\s*\d{4}$/.test(s)) {
+    return { date: s.replace(/\s+/g, ''), precision: 'RANGE' };
+  }
+  // "Sommer 1920" / "Winter 1920" → YEAR
+  if (/^(Frühling|Sommer|Herbst|Winter)\s+\d{4}$/i.test(s)) {
+    return { date: s, precision: 'YEAR' };
+  }
+  // "unbekannt" / "unknown" / "?" → UNKNOWN
+  if (/^(unbekannt|unknown|\?|k\.a\.)$/i.test(s)) {
+    return { date: null, precision: 'UNKNOWN' };
+  }
+  // Just year (4 digits) → YEAR
+  if (/^\d{4}$/.test(s)) {
+    return { date: s, precision: 'YEAR' };
+  }
+  // Month-year "MM.JJJJ" / "MM/JJJJ" → MONTH
+  if (/^\d{1,2}[.\/]\d{4}$/.test(s)) {
+    return { date: s.replace('/','.'), precision: 'MONTH' };
+  }
+  // Default: try full date parsing, EXACT
+  return { date: parseGermanDate(s), precision: 'EXACT' };
+}
+
+// Render a date with its precision prefix: "ca. 1920", "~ 1920", etc.
+function fmtDateWithPrecision(raw, precision) {
+  if (!raw) {
+    if (precision === 'UNKNOWN') return 'unbekannt';
+    return '';
+  }
+  const display = fmtDateDisplay(raw);
+  switch (precision) {
+    case 'APPROXIMATE': return 'ca. ' + display;
+    case 'YEAR':        return display;
+    case 'MONTH':       return display;
+    case 'RANGE':       return display;
+    case 'UNKNOWN':     return 'unbekannt';
+    case 'EXACT':
+    default:            return display;
+  }
+}
+
 // Wire blur-handlers on date-shaped inputs inside a form or dialog.
 function wireDateInputs(root) {
   if (!root) return;
@@ -1803,8 +1858,8 @@ function showNodeHover(n) {
   const el = document.getElementById('tree-hover');
   const p = n.person;
   const bits = [];
-  if (p.birth_date) bits.push(`* ${fmtDateDisplay(p.birth_date)}${p.birth_place ? ', ' + p.birth_place : ''}`);
-  if (p.death_date) bits.push(`✝ ${fmtDateDisplay(p.death_date)}${p.death_place ? ', ' + p.death_place : ''}`);
+  if (p.birth_date) bits.push(`* ${fmtDateWithPrecision(p.birth_date, p.birth_date_precision)}${p.birth_place ? ', ' + p.birth_place : ''}`);
+  if (p.death_date) bits.push(`✝ ${fmtDateWithPrecision(p.death_date, p.death_date_precision)}${p.death_place ? ', ' + p.death_place : ''}`);
   el.innerHTML = '';
   el.appendChild(h('h4', {}, fullNameOf(p)));
   for (const b of bits) el.appendChild(h('div', { class: 'meta' }, b));
@@ -1959,12 +2014,12 @@ function renderDetail() {
   if (p.birth_date || p.death_date || p.birth_place || p.death_place) {
     el.appendChild(h('div', { class: 'lifespan' },
       h('div', { class: 'born' },
-        h('b', {}, p.birth_date ? fmtDateDisplay(p.birth_date) : '?'),
+        h('b', {}, p.birth_date ? fmtDateWithPrecision(p.birth_date, p.birth_date_precision) : '?'),
         p.birth_place ? h('small', {}, 'geboren in ' + p.birth_place) : null,
       ),
       h('div', { class: 'arc' }, p.death_date ? '→' : 'lebt'),
       h('div', { class: 'died' },
-        p.death_date ? h('b', {}, fmtDateDisplay(p.death_date)) : h('b', {}, '—'),
+        p.death_date ? h('b', {}, fmtDateWithPrecision(p.death_date, p.death_date_precision)) : h('b', {}, '—'),
         p.death_place ? h('small', {}, 'gestorben in ' + p.death_place) : null,
       ),
     ));
@@ -2355,7 +2410,12 @@ function openSubDialog(kind, personId, existing = null) {
     const data = Object.fromEntries(new FormData(form));
     for (const f of fields) if (f.type === 'checkbox') data[f.name] = form.querySelector(`[name="${f.name}"]`).checked ? '1' : '';
     for (const [k, v] of Object.entries(data)) {
-      if (/date|_at$|^date$|since|until|start|end/i.test(k)) data[k] = toIsoDate(v);
+      if (/date|_at$|^date$|since|until|start|end/i.test(k) && !k.endsWith('_precision')) {
+        const det = detectDatePrecision(v);
+        data[k] = det.date ? toIsoDate(det.date) : null;
+        const pk = k + '_precision';
+        if (!data[pk] || data[pk] === 'EXACT') data[pk] = det.precision;
+      }
     }
     try {
       if (isEdit) await api.updateSub(personId, kind, existing.id, data);
@@ -2954,7 +3014,14 @@ function openPersonDialog(p = null) {
     ev.preventDefault();
     const data = Object.fromEntries(new FormData(form));
     for (const [k, v] of Object.entries(data)) {
-      if (/date|_at$/i.test(k)) data[k] = toIsoDate(v);
+      if (/date|_at$/i.test(k) && !k.endsWith('_precision')) {
+        // Auto-detect precision from freetext ("ca. 1920" → APPROXIMATE etc.)
+        const det = detectDatePrecision(v);
+        data[k] = det.date ? toIsoDate(det.date) : null;
+        // Only overwrite precision if user didn't pick one explicitly
+        const pk = k + '_precision';
+        if (!data[pk] || data[pk] === 'EXACT') data[pk] = det.precision;
+      }
     }
     try {
       if (p) await api.update(p.id, data);

@@ -42,8 +42,11 @@ const COOKIE_OPTS = {
 
 const PERSON_FIELDS = [
   'given_name','surname','birth_name','nicknames','gender',
-  'birth_date','birth_place','death_date','death_place','notes'
+  'birth_date','birth_place','death_date','death_place','notes',
+  'birth_date_precision','death_date_precision',
 ];
+
+const DATE_PRECISION_VALUES = new Set(['EXACT','MONTH','YEAR','APPROXIMATE','RANGE','UNKNOWN']);
 
 function sanitizePerson(body) {
   const out = {};
@@ -56,6 +59,11 @@ function sanitizePerson(body) {
   }
   if (out.gender && !['m','f','x',''].includes(out.gender)) {
     throw httpErr(400, 'gender must be m, f or x');
+  }
+  for (const pf of ['birth_date_precision','death_date_precision']) {
+    if (out[pf] && !DATE_PRECISION_VALUES.has(out[pf])) {
+      throw httpErr(400, `${pf} must be one of ${[...DATE_PRECISION_VALUES].join(', ')}`);
+    }
   }
   return out;
 }
@@ -244,12 +252,15 @@ app.post('/api/persons', requireEditor, (req, res) => {
   const now = nowIso();
   db.prepare(`
     INSERT INTO persons (id, given_name, surname, birth_name, nicknames, gender,
-      birth_date, birth_place, death_date, death_place, notes, created_at, updated_at)
+      birth_date, birth_date_precision, birth_place, death_date, death_date_precision, death_place,
+      notes, created_at, updated_at)
     VALUES (@id,@given_name,@surname,@birth_name,@nicknames,@gender,
-      @birth_date,@birth_place,@death_date,@death_place,@notes,@created_at,@updated_at)
+      @birth_date,@birth_date_precision,@birth_place,@death_date,@death_date_precision,@death_place,
+      @notes,@created_at,@updated_at)
   `).run({
     id, given_name:null, surname:null, birth_name:null, nicknames:null, gender:null,
-    birth_date:null, birth_place:null, death_date:null, death_place:null, notes:null,
+    birth_date:null, birth_date_precision:'EXACT',
+    birth_place:null, death_date:null, death_date_precision:'EXACT', death_place:null, notes:null,
     ...data, created_at: now, updated_at: now,
   });
   logAudit(req.auth.role, 'person.create', id);
@@ -620,12 +631,12 @@ app.delete('/api/person-images', requireEditor, (req, res) => {
 // Health events are editor-only for viewer too (privacy).
 
 const SUB_RESOURCES = {
-  jobs:              { table: 'jobs',             cols: ['title','employer','start_date','end_date','place','notes'], order: 'COALESCE(start_date, created_at)' },
-  residences:        { table: 'residences',       cols: ['place','street','city','district','postal_code','postal_code_historical','region','country','start_date','end_date','kind','notes'], order: 'COALESCE(start_date, created_at)' },
-  military:          { table: 'military_service', cols: ['branch','rank','unit','start_date','end_date','campaigns','notes'], order: 'COALESCE(start_date, created_at)' },
+  jobs:              { table: 'jobs',             cols: ['title','employer','start_date','start_date_precision','end_date','end_date_precision','place','notes'], order: 'COALESCE(start_date, created_at)' },
+  residences:        { table: 'residences',       cols: ['place','street','city','district','postal_code','postal_code_historical','region','country','start_date','start_date_precision','end_date','end_date_precision','kind','notes'], order: 'COALESCE(start_date, created_at)' },
+  military:          { table: 'military_service', cols: ['branch','rank','unit','start_date','start_date_precision','end_date','end_date_precision','campaigns','notes'], order: 'COALESCE(start_date, created_at)' },
   anecdotes:         { table: 'anecdotes',        cols: ['title','text','source','year'], order: 'COALESCE(year, created_at)' },
-  'health-events':   { table: 'health_events',    cols: ['condition','date','hereditary','notes'], editorOnlyRead: true, order: 'COALESCE(date, created_at)' },
-  education:         { table: 'education',        cols: ['institution','field','degree','place','start_date','end_date','notes'], order: 'COALESCE(start_date, created_at)' },
+  'health-events':   { table: 'health_events',    cols: ['condition','date','date_precision','hereditary','notes'], editorOnlyRead: true, order: 'COALESCE(date, created_at)' },
+  education:         { table: 'education',        cols: ['institution','field','degree','place','start_date','start_date_precision','end_date','end_date_precision','notes'], order: 'COALESCE(start_date, created_at)' },
 };
 
 function sanitizeSub(cfg, body) {
@@ -637,6 +648,12 @@ function sanitizeSub(cfg, body) {
     if (typeof v !== 'string') throw httpErr(400, `${c} must be string`);
     if (v.length > 2000) throw httpErr(400, `${c} too long`);
     out[c] = v.trim() || null;
+  }
+  // Validate *_precision columns
+  for (const c of Object.keys(out)) {
+    if (c.endsWith('_precision') && out[c] && !DATE_PRECISION_VALUES.has(out[c])) {
+      throw httpErr(400, `${c} must be one of ${[...DATE_PRECISION_VALUES].join(', ')}`);
+    }
   }
   return out;
 }
