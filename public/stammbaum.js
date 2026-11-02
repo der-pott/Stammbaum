@@ -977,6 +977,7 @@ function computeLayout() {
   let orphanCursor = cursor;
   for (const p of state.persons) {
     if (posById.has(p.id)) continue;
+    if (upstreamParentIds.has(p.id)) continue;   // upstream parents are placed later above their child
     const g = gen.get(p.id) ?? 0;
     makeNode(p.id, orphanCursor, marginT + g * ROW_H);
     orphanCursor += NODE_W + FAMILY_GAP;
