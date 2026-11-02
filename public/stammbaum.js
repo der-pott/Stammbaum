@@ -457,26 +457,30 @@ function computeLayout() {
     if (!parentOf.get(p.id).length) gen.set(p.id, 0);
   }
   let changed = true, safety = 0;
+  function bump(id, g) {
+    const cur = gen.get(id);
+    if (cur == null || g > cur) { gen.set(id, g); changed = true; }
+  }
   while (changed && safety++ < 100) {
     changed = false;
+    // Parent-prop: push children DOWN by at-least-one-below max(parents).
     for (const p of state.persons) {
       const pars = parentOf.get(p.id);
       if (!pars.length) continue;
       const parGens = pars.filter(pid => gen.has(pid)).map(pid => gen.get(pid));
       if (!parGens.length) continue;
-      const target = Math.max(...parGens) + 1;
-      if (gen.get(p.id) !== target) { gen.set(p.id, target); changed = true; }
+      bump(p.id, Math.max(...parGens) + 1);
     }
-    // align spouses: both to max of their current gens
+    // Align spouses to max of their current gens (upward only).
     for (const [a, bs] of spouseOf) {
       for (const b of bs) {
         const ga = gen.get(a), gb = gen.get(b);
-        if (ga != null && gb != null && ga !== gb) {
-          const target = Math.max(ga, gb);
-          if (gen.get(a) !== target) { gen.set(a, target); changed = true; }
-          if (gen.get(b) !== target) { gen.set(b, target); changed = true; }
-        } else if (ga != null && gb == null) { gen.set(b, ga); changed = true; }
-          else if (gb != null && ga == null) { gen.set(a, gb); changed = true; }
+        if (ga == null && gb == null) continue;
+        const target = Math.max(ga ?? -Infinity, gb ?? -Infinity);
+        if (target !== -Infinity) {
+          bump(a, target);
+          bump(b, target);
+        }
       }
     }
   }
