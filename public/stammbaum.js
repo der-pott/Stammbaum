@@ -644,9 +644,7 @@ function computeLayout() {
 
   const marginL = 80, marginT = 80, marginB = 60, marginR = 80;
 
-  function layoutSlot(a, slotLeftX, y, visited = new Set()) {
-    if (visited.has(a)) return;
-    visited.add(a);
+  function placeSlotAt(a, slotLeftX, y) {
     const slot = slotByAnchor.get(a);
     const anchorCx = slotLeftX + NODE_W / 2;
     const satCxs = [];
@@ -654,67 +652,79 @@ function computeLayout() {
       satCxs.push(slotLeftX + NODE_W + (i + 1) * MARRIAGE_GAP + i * NODE_W + NODE_W / 2);
     }
     slotPos.set(a, { anchorCx, satelliteCxs: satCxs, y, slotLeftX, width: slot.width });
+  }
 
-    // Place children in a row centered under the slot's "children-anchor-point".
-    // For a slot with multiple spouses that have children with the anchor,
-    // we group children by which spouse they share with. Each group goes under
-    // THAT pair's midpoint.
+  function shiftSubtree(a, dx, visited = new Set()) {
+    if (visited.has(a)) return;
+    visited.add(a);
+    const pos = slotPos.get(a);
+    if (!pos) return;
+    pos.anchorCx += dx;
+    pos.satelliteCxs = pos.satelliteCxs.map(x => x + dx);
+    pos.slotLeftX += dx;
+    const kids = childSlotsOfAnchor.get(a) || [];
+    for (const c of kids) shiftSubtree(c, dx, visited);
+  }
+
+  function layoutSlot(a, slotLeftX, y, visited = new Set()) {
+    if (visited.has(a)) return;
+    visited.add(a);
+    placeSlotAt(a, slotLeftX, y);
+    const slot = slotByAnchor.get(a);
+    const sPos = slotPos.get(a);
+
     const kids = childSlotsOfAnchor.get(a) || [];
     if (!kids.length) return;
 
-    // Group kids by WHICH co-parent they share with the anchor.
-    // Child C has parents [pA, pB]. If pA is anchor, the "co-parent" is pB.
-    const byCoparent = new Map();  // coparentId or 'solo' -> [childAnchor]
+    // Place child slots sequentially left-to-right (slot.leftX of next
+    // follows slot.rightX of previous + SIBLING_GAP). This gives each
+    // child its own slot-width worth of space (anchor + satellites).
+    const childLefts = [];
+    const childAnchorCxs = [];
+    let cursor = 0;  // arbitrary origin; we'll shift the whole group later
+    for (const c of kids) {
+      const w = slotByAnchor.get(c).width;
+      childLefts.push(cursor);
+      childAnchorCxs.push(cursor + NODE_W / 2);
+      cursor += w + SIBLING_GAP;
+    }
+
+    // Center the ANCHORS group under the appropriate parent-midpoint.
+    // For a slot with a single co-parent-with-children (the common case), use
+    // the (anchor, co-parent) midpoint. If there are multiple co-parents with
+    // children, we have to pick one; for now use the midpoint between the
+    // two outermost anchor-cxs so the group is centered under the slot itself.
+    //
+    // Build target: find the dominant co-parent (satellite with most shared
+    // kids). Drop line comes from (anchor + co-parent)/2 if co-parent is in
+    // this slot's satellites.
+    const kidsByCoparent = new Map();
     for (const c of kids) {
       const pars = parentOf.get(c) || [];
-      const other = pars.find(x => x !== a);
-      const key = other || 'solo';
-      if (!byCoparent.has(key)) byCoparent.set(key, []);
-      byCoparent.get(key).push(c);
+      const other = pars.find(x => x !== a) || null;
+      if (!kidsByCoparent.has(other)) kidsByCoparent.set(other, []);
+      kidsByCoparent.get(other).push(c);
+    }
+    // Dominant group = largest count
+    let dominant = null, bestCount = -1;
+    for (const [cop, list] of kidsByCoparent) {
+      if (list.length > bestCount) { bestCount = list.length; dominant = cop; }
+    }
+    let targetCx;
+    if (dominant && slot.satellites.includes(dominant)) {
+      const idx = slot.satellites.indexOf(dominant);
+      targetCx = (sPos.anchorCx + sPos.satelliteCxs[idx]) / 2;
+    } else {
+      // Solo or cross-tree co-parent — center under the anchor.
+      targetCx = sPos.anchorCx;
     }
 
-    // Each group needs a horizontal "drop anchor x" (midpoint between anchor
-    // and the co-parent, if co-parent is a satellite in this slot).
-    const groups = [];
-    for (const [cop, kidList] of byCoparent) {
-      let dropX = anchorCx;
-      if (cop !== 'solo') {
-        const satIdx = slot.satellites.indexOf(cop);
-        if (satIdx >= 0) {
-          dropX = (anchorCx + satCxs[satIdx]) / 2;
-        }
-      }
-      // group width = sum of child subtree widths + gaps
-      const widths = kidList.map(k => subtreeWidth.get(k) || NODE_W);
-      const totalW = widths.reduce((s, w) => s + w, 0) + FAMILY_GAP * Math.max(0, kidList.length - 1);
-      groups.push({ dropX, kids: kidList, widths, totalW });
-    }
+    const anchorMid = (childAnchorCxs[0] + childAnchorCxs[childAnchorCxs.length - 1]) / 2;
+    const shift = targetCx - anchorMid;
 
-    // If multiple groups, lay them out side-by-side centered on their drop points,
-    // but shift them so they don't overlap.
-    // Sort by desired dropX.
-    groups.sort((x, y) => x.dropX - y.dropX);
-
-    // Compute each group's actual left starting x: center on dropX.
-    // Then if overlap with previous group's right edge, push right.
-    let prevRight = -Infinity;
-    for (const g of groups) {
-      let leftX = g.dropX - g.totalW / 2;
-      if (leftX < prevRight + FAMILY_GAP) leftX = prevRight + FAMILY_GAP;
-      g.leftX = leftX;
-      prevRight = leftX + g.totalW;
-    }
-
-    // Place children in each group.
-    for (const g of groups) {
-      let cursor = g.leftX;
-      for (let i = 0; i < g.kids.length; i++) {
-        const c = g.kids[i];
-        const cw = g.widths[i];
-        const cy = y + ROW_H;
-        layoutSlot(c, cursor, cy, visited);
-        cursor += cw + FAMILY_GAP;
-      }
+    for (let i = 0; i < kids.length; i++) {
+      const cy = y + ROW_H;
+      layoutSlot(kids[i], childLefts[i] + shift, cy, visited);
     }
   }
 
