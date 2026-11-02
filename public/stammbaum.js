@@ -393,9 +393,21 @@ function fitTree(opts = {}) {
   const sy = (ch - topPad - bottomPad) / state.layout.totalH;
   // Default fit: aim for readable zoom; allow pan. "all" variant shows entire tree.
   const target = Math.min(sx, sy, 1) * 0.95;
-  // On mobile, always fit the whole tree (no minimum clamp) so nothing is cut off at edges.
-  state.pz.k = (opts.all || isMobile) ? Math.max(0.1, target) : Math.max(target, 0.65);
-  state.pz.x = sidePad + (cw - sidePad * 2 - state.layout.totalW * state.pz.k) / 2;
+  if (opts.all) {
+    state.pz.k = Math.max(0.1, target);
+  } else if (isMobile) {
+    // Mobile default: readable zoom, user pans horizontally. Fit the HEIGHT so a vertical slice is visible.
+    state.pz.k = Math.max(0.55, Math.min(1, sy * 0.95));
+  } else {
+    state.pz.k = Math.max(target, 0.65);
+  }
+  // Center. On mobile, prefer centering on the "newest" (rightmost) generations where the current family lives.
+  if (isMobile && !opts.all) {
+    const viewW = state.layout.totalW * state.pz.k;
+    state.pz.x = cw - viewW - sidePad; // flush-right so Maximilian / latest generation visible first
+  } else {
+    state.pz.x = sidePad + (cw - sidePad * 2 - state.layout.totalW * state.pz.k) / 2;
+  }
   state.pz.y = topPad + (ch - topPad - bottomPad - state.layout.totalH * state.pz.k) / 2;
   renderTree();
 }
