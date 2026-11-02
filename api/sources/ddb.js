@@ -11,7 +11,7 @@ export async function search(person) {
   const url = `https://api.deutsche-digitale-bibliothek.de/search?query=${encodeURIComponent(full)}&rows=10`;
   const headers = { accept: 'application/json' };
   if (apiKey) headers.Authorization = `OAuth oauth_consumer_key="${apiKey}"`;
-  const r = await httpGet('ddb', url, { accept: 'json', headers });
+  const r = await httpGet('ddb', url, { accept: 'json', headers, browser: !apiKey });
   if (!r.ok) {
     if (r.status === 401 || r.status === 403) {
       return [{ source: 'ddb', title: 'DDB — API-Key empfohlen', url: 'https://www.deutsche-digitale-bibliothek.de/user/apikey', snippet: 'Für Suche einen kostenlosen API-Key eintragen (ENV: DDB_API_KEY).', confidence: 0, payload: { needs_key: true } }];

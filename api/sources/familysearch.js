@@ -15,7 +15,7 @@ export async function search(person) {
     'q.birthLikePlace': person.birth_place || '',
   });
   const url = `https://www.familysearch.org/search/record/results?${params.toString()}`;
-  const r = await httpGet('familysearch', url, { accept: 'text', timeout: 12_000 });
+  const r = await httpGet('familysearch', url, { accept: 'text', timeout: 12_000, browser: true });
   if (!r.ok) return [{ source: 'familysearch', title: 'FamilySearch', url, snippet: `Zugriff nicht möglich (${r.error}). Für detaillierte Suche: Login unter familysearch.org`, confidence: 0, payload: { note: 'auth-helpful', error: r.error } }];
   try {
     const $ = cheerio.load(r.body);

@@ -9,7 +9,7 @@ export async function search(person) {
   const { full } = nameParts(person);
   if (!full) return [];
   const url = `https://zefys.staatsbibliothek-berlin.de/suche?tx_dlf%5Bquery%5D=${encodeURIComponent(full)}`;
-  const r = await httpGet('zefys', url, { accept: 'text' });
+  const r = await httpGet('zefys', url, { accept: 'text', timeout: 8_000 });
   if (!r.ok) return [{ source: 'zefys', title: 'ZEFYS', url, snippet: `Zugriff nicht möglich (${r.error})`, confidence: 0, payload: { error: r.error } }];
   try {
     const $ = cheerio.load(r.body);

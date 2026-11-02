@@ -2,7 +2,9 @@
 
 import { db, nowIso } from './db.js';
 
-const UA = 'Stammbaum-Pott/1.0 (private family research; contact: maximilian.pott@outlook.com)';
+const UA_BOT = 'Stammbaum-Pott/1.0 (private family research; contact: maximilian.pott@outlook.com)';
+// Browser-mimicking UA for sites that 403 obvious bots (familysearch, arcinsys, viaf, ddb).
+const UA_BROWSER = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const DOMAIN_INTERVAL_MS = 1500;
 const DEFAULT_TIMEOUT = 15_000;
 
@@ -29,7 +31,7 @@ function logScrape(source, url, status, duration_ms, error) {
   } catch { /* ignore */ }
 }
 
-export async function httpGet(source, url, { timeout = DEFAULT_TIMEOUT, headers = {}, accept = 'json' } = {}) {
+export async function httpGet(source, url, { timeout = DEFAULT_TIMEOUT, headers = {}, accept = 'json', browser = false } = {}) {
   const host = hostOf(url);
   await waitForDomain(host);
   const ctrl = new AbortController();
@@ -40,8 +42,12 @@ export async function httpGet(source, url, { timeout = DEFAULT_TIMEOUT, headers 
       signal: ctrl.signal,
       redirect: 'follow',
       headers: {
-        'user-agent': UA,
+        'user-agent': browser ? UA_BROWSER : UA_BOT,
         'accept-language': 'de,en;q=0.8',
+        ...(browser ? {
+          'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'accept-encoding': 'gzip, deflate, br',
+        } : {}),
         ...headers,
       },
     });
