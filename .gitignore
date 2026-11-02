@@ -9,3 +9,4 @@ agentdb.rvf.lock
 .env
 .env.*
 !.env.example
+inbox/processed/

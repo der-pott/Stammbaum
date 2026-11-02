@@ -1,5 +1,16 @@
 # Stammbaum — Claude-Projektregeln
 
+## Inbox-Ordner `inbox/`
+
+User droppt Bilder/Dokumente in `/Users/maximilianpott/Projects/Stammbaum/inbox/`. Trigger-Phrasen: „verarbeite inbox", „inbox", „drin ist was".
+
+Workflow pro File in `inbox/` (ohne `README.md`, `.gitkeep`, `processed/`):
+1. Analyse: welche Person(en), welche Dokumenten-Art.
+2. Upload via `/api/images` + `/api/person-images` mit sinnvoller `role`.
+3. Strukturierte Fakten extrahieren (Adressen → `residences`, Berufe → `jobs`, Ausbildung → `education`, Militär → `military`, Lebensdaten → `PATCH persons`, usw. gemäß Regel „Dokumente ausschlachten").
+4. File verschieben nach `inbox/processed/YYYY-MM-DD/<originalname>` (nicht löschen, Backup).
+5. Pro File dem User berichten: welche Person(en), welche strukturierten Einträge dazugekommen sind.
+
 ## Bilder immer verknüpfen
 
 Wenn der User im Chat ein Bild (JPG, PNG, WEBP, HEIC, PDF) teilt, das zu diesem Projekt gehört (Urkunden, Fotos, Dokumente), **sofort und ohne Rückfrage** in die Stammbaum-DB laden und mit allen betroffenen Personen verknüpfen.
