@@ -1004,22 +1004,64 @@ function computeLayout() {
 
   // --- UPSTREAM COUPLE PLACEMENT --------------------------------------
   // Position upstream parent-couples directly above their child (anchor on
-  // left of ❤, satellite on right). y = child.y - ROW_H.
-  const upstreamNodes = [];           // {anchorId, satId, childNode, pA, pB}
+  // left of ❤, satellite on right). y = child.y - ROW_H. The ideal x is the
+  // child's cx. However if two neighboring upstream couples (e.g. above two
+  // sides of a marital couple like OP+EP) would overlap, OR if an upstream
+  // couple would collide with an already-placed node in the same y row, we
+  // shift the upstream couple laterally. The T-drop in the renderer already
+  // bends to the child's actual cx (M mx V barY H child.cx V childTopY), so
+  // a horizontal shift is cosmetic — the child-to-parent line stays correct.
+  const COUPLE_W_EFF = NODE_W * 2 + MARRIAGE_GAP;   // visual width of an upstream couple
+  const UPSTREAM_PAD = 24;                           // extra breathing between couples / neighbors
+  const upstreamNodes = [];
+  // 1) Collect ideal placements.
+  const toPlace = [];
   for (const [childId, uc] of upstreamCouples) {
     const childNode = posById.get(childId);
     if (!childNode) continue;
-    const anchorPerson = personById.get(uc.anchorId);
-    const satPerson = personById.get(uc.satId);
-    if (!anchorPerson || !satPerson) continue;
-    const cx = childNode.cx;
-    const y = childNode.y - ROW_H;
-    // Center the couple on child's cx. Anchor goes left of ❤, sat right.
-    const anchorCx = cx - (NODE_W + MARRIAGE_GAP) / 2;
-    const satCx = cx + (NODE_W + MARRIAGE_GAP) / 2;
-    const anchorNode = makeNode(uc.anchorId, Math.round(anchorCx - NODE_W / 2), y);
-    const satNode = makeNode(uc.satId, Math.round(satCx - NODE_W / 2), y);
-    upstreamNodes.push({ ...uc, childId, anchorNode, satNode, childNode });
+    if (!personById.get(uc.anchorId) || !personById.get(uc.satId)) continue;
+    toPlace.push({ uc, childId, childNode, cx: childNode.cx, y: childNode.y - ROW_H });
+  }
+  // 2) Sort by ideal cx so we can resolve left→right.
+  toPlace.sort((a, b) => a.cx - b.cx || a.childId.localeCompare(b.childId));
+  // 3) Resolve overlaps:
+  //    - vs. previously placed upstream couple (same y row)
+  //    - vs. regular nodes already in `nodes` at that y row
+  function occupiedRanges(y) {
+    // Return [{left, right}] of nodes in the same horizontal row (within half a NODE_H).
+    const ranges = [];
+    for (const n of nodes) {
+      if (Math.abs(n.y - y) < NODE_H * 0.75) {
+        ranges.push({ left: n.x - UPSTREAM_PAD, right: n.x + n.w + UPSTREAM_PAD });
+      }
+    }
+    ranges.sort((a, b) => a.left - b.left);
+    return ranges;
+  }
+  function shiftOutOf(cx, y) {
+    // Find the smallest shift (prefer right, then left) that frees the couple's
+    // horizontal footprint from all occupied ranges in that y row.
+    const halfW = COUPLE_W_EFF / 2;
+    const ranges = occupiedRanges(y);
+    let x1 = cx - halfW, x2 = cx + halfW;
+    // Iteratively nudge right past each conflicting range.
+    let safety = 0;
+    while (safety++ < 50) {
+      const hit = ranges.find(r => !(x2 < r.left || r.right < x1));
+      if (!hit) break;
+      // Shift to just past the right edge of the hit range.
+      const shift = hit.right - x1;
+      x1 += shift; x2 += shift;
+    }
+    return x1 + halfW;
+  }
+  for (const t of toPlace) {
+    const freeCx = shiftOutOf(t.cx, t.y);
+    const anchorCx = freeCx - (NODE_W + MARRIAGE_GAP) / 2;
+    const satCx = freeCx + (NODE_W + MARRIAGE_GAP) / 2;
+    const anchorNode = makeNode(t.uc.anchorId, Math.round(anchorCx - NODE_W / 2), t.y);
+    const satNode = makeNode(t.uc.satId, Math.round(satCx - NODE_W / 2), t.y);
+    upstreamNodes.push({ ...t.uc, childId: t.childId, anchorNode, satNode, childNode: t.childNode });
   }
 
   const upstreamSpouseKeys = new Set(upstreamNodes.map(u => u.edgeKey));
@@ -1053,11 +1095,35 @@ function computeLayout() {
   const totalW = maxX2 + marginR;
   const totalH = finalMaxY + marginB;
 
+  // --- Overlap guard (collision detection) ----------------------------
+  // Scan all placed nodes for axis-aligned bbox overlaps. Nodes include
+  // the avatar circle plus the name/date label block below. We approximate
+  // the label height with a conservative 3-line estimate so wrapped names
+  // don't collide with the row below either.
+  const LABEL_LINES_EST = 3;
+  const LINE_H = 18;
+  const overlaps = [];
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i], b = nodes[j];
+      const aBottom = a.y + a.h + LABEL_LINES_EST * LINE_H;
+      const bBottom = b.y + b.h + LABEL_LINES_EST * LINE_H;
+      const aRight = a.x + a.w, bRight = b.x + b.w;
+      if (a.x >= bRight || b.x >= aRight) continue;      // x-separate
+      if (a.y >= bBottom || b.y >= aBottom) continue;    // y-separate
+      overlaps.push({ a: a.id, b: b.id, aName: primaryNameOf(a.person), bName: primaryNameOf(b.person) });
+    }
+  }
+  if (overlaps.length) {
+    console.warn(`[layout] ${overlaps.length} node overlap(s) detected:`, overlaps.slice(0, 10));
+  }
+
   return {
     nodes, links, posById,
     slotByAnchor, slotPos, childSlotsOfAnchor, satelliteOf, spouseEdges,
     forcedSatelliteOf, parentOf, primaryPartnerOf,
     upstreamNodes, upstreamSpouseKeys, upstreamParentEdgeKeys,
+    overlaps,
     totalW, totalH,
     marginL, marginT,
   };
@@ -1107,7 +1173,20 @@ function renderTree() {
     return;
   }
 
-  const { nodes, links, posById, totalW, totalH, marginT, spouseEdges } = state.layout;
+  const { nodes, links, posById, totalW, totalH, marginT, spouseEdges, overlaps } = state.layout;
+
+  // Surface collision count in the tree chrome so regressions are visible
+  // without opening the console.
+  const warnEl = document.getElementById('layout-warn');
+  if (warnEl) {
+    if (overlaps && overlaps.length) {
+      warnEl.hidden = false;
+      warnEl.textContent = `⚠ ${overlaps.length} Layout-Konflikt${overlaps.length === 1 ? '' : 'e'}`;
+      warnEl.title = overlaps.slice(0, 5).map(o => `${o.aName} ↔ ${o.bName}`).join('\n');
+    } else {
+      warnEl.hidden = true;
+    }
+  }
 
   const canvas = document.getElementById('tree-canvas');
   const cw = canvas.clientWidth, ch = canvas.clientHeight;
