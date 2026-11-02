@@ -729,31 +729,39 @@ for (const [kind, cfg] of Object.entries(SUB_RESOURCES)) {
     const now = nowIso();
     const colList = ['id', 'person_id', ...cfg.cols, 'created_at'];
     const placeholders = colList.map(c => `@${c}`).join(', ');
-    db.prepare(`INSERT INTO ${cfg.table} (${colList.join(', ')}) VALUES (${placeholders})`)
-      .run({ id, person_id: req.params.id, created_at: now, ...Object.fromEntries(cfg.cols.map(c => [c, null])), ...data });
+    const row = { id, person_id: req.params.id, created_at: now, ...Object.fromEntries(cfg.cols.map(c => [c, null])), ...data };
+    db.prepare(`INSERT INTO ${cfg.table} (${colList.join(', ')}) VALUES (${placeholders})`).run(row);
     logAudit(req.auth.role, `${kind}.create`, id);
-    res.status(201).json(db.prepare(`SELECT * FROM ${cfg.table} WHERE id=?`).get(id));
+    const after = db.prepare(`SELECT * FROM ${cfg.table} WHERE id=?`).get(id);
+    logAction(req.cookies?.[COOKIE_NAME], { type: `${cfg.table}.create`, target_id: id, before: null, after }, `${kind} angelegt`);
+    res.status(201).json(after);
   });
   app.patch(`/api/persons/:id/${kind}/:sid`, requireEditor, (req, res) => {
-    const row = db.prepare(`SELECT id FROM ${cfg.table} WHERE id=? AND person_id=?`).get(req.params.sid, req.params.id);
+    const row = db.prepare(`SELECT * FROM ${cfg.table} WHERE id=? AND person_id=?`).get(req.params.sid, req.params.id);
     if (!row) return res.status(404).json({ error: 'not found' });
     const data = sanitizeSub(cfg, req.body || {});
     if (!Object.keys(data).length) return res.status(400).json({ error: 'no fields' });
+    const before = { ...row };
     const set = Object.keys(data).map(k => `${k}=@${k}`).join(', ');
     db.prepare(`UPDATE ${cfg.table} SET ${set} WHERE id=@id`).run({ ...data, id: req.params.sid });
     logAudit(req.auth.role, `${kind}.update`, req.params.sid);
-    res.json(db.prepare(`SELECT * FROM ${cfg.table} WHERE id=?`).get(req.params.sid));
+    const after = db.prepare(`SELECT * FROM ${cfg.table} WHERE id=?`).get(req.params.sid);
+    logAction(req.cookies?.[COOKIE_NAME], { type: `${cfg.table}.update`, target_id: req.params.sid, before, after }, `${kind} bearbeitet`);
+    res.json(after);
   });
   app.delete(`/api/persons/:id/${kind}/:sid`, requireEditor, (req, res) => {
     const hard = req.query.hard === '1';
+    const before = db.prepare(`SELECT * FROM ${cfg.table} WHERE id=? AND person_id=?`).get(req.params.sid, req.params.id);
     if (hard) {
       const info = db.prepare(`DELETE FROM ${cfg.table} WHERE id=? AND person_id=?`).run(req.params.sid, req.params.id);
       logAudit(req.auth.role, `${kind}.delete.hard`, req.params.sid);
+      if (before) logAction(req.cookies?.[COOKIE_NAME], { type: `${cfg.table}.delete`, target_id: req.params.sid, before, after: null }, `${kind} gelöscht`);
       return res.json({ deleted: info.changes, hard: true });
     }
     const info = db.prepare(`UPDATE ${cfg.table} SET deleted_at=?, deleted_by=? WHERE id=? AND person_id=? AND deleted_at IS NULL`)
       .run(nowIso(), req.auth.role, req.params.sid, req.params.id);
     logAudit(req.auth.role, `${kind}.delete.soft`, req.params.sid);
+    if (before) logAction(req.cookies?.[COOKIE_NAME], { type: `${cfg.table}.update`, target_id: req.params.sid, before, after: { ...before, deleted_at: nowIso(), deleted_by: req.auth.role } }, `${kind} in Papierkorb`);
     res.json({ deleted: info.changes, soft: true });
   });
 }
@@ -1382,6 +1390,301 @@ app.delete('/api/plausibility/dismiss/:key', requireEditor, (req, res) => {
   const info = db.prepare('DELETE FROM plausibility_dismissals WHERE issue_key=?').run(req.params.key);
   logAudit(req.auth.role, 'plausibility.undismiss', req.params.key);
   res.json({ removed: info.changes });
+});
+
+/* dashboard: anniversaries + stats -------------------------------------- */
+
+function parseIsoDay(s) {
+  if (!s) return null;
+  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const yr = +m[1], mo = +m[2], da = +m[3];
+  if (yr < 1500 || yr > 2500 || mo < 1 || mo > 12 || da < 1 || da > 31) return null;
+  return { year: yr, month: mo, day: da };
+}
+
+app.get('/api/dashboard/anniversaries', requireViewer, (req, res) => {
+  const days = Math.max(1, Math.min(365, Number(req.query.days) || 30));
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const todayMs = today.getTime();
+  const horizon = todayMs + days * 86400000;
+
+  const items = [];
+  // Birth + death
+  const persons = db.prepare(`SELECT id, given_name, surname, birth_date, death_date FROM persons WHERE deleted_at IS NULL`).all();
+  for (const p of persons) {
+    const b = parseIsoDay(p.birth_date);
+    const d = parseIsoDay(p.death_date);
+    const name = [p.given_name, p.surname].filter(Boolean).join(' ');
+    if (b) {
+      // next birthday in horizon
+      let ny = today.getFullYear();
+      let occ = new Date(ny, b.month - 1, b.day).getTime();
+      if (occ < todayMs) { ny++; occ = new Date(ny, b.month - 1, b.day).getTime(); }
+      if (occ <= horizon) {
+        const years = ny - b.year;
+        if (!d) {
+          items.push({ type: 'birthday', person_id: p.id, when: occ, mmdd: pad2(b.month)+'-'+pad2(b.day), years_since: years, label: `${name} wird ${years}` });
+        } else {
+          items.push({ type: 'birthday_memorial', person_id: p.id, when: occ, mmdd: pad2(b.month)+'-'+pad2(b.day), years_since: years, label: `${name} wäre ${years} geworden` });
+        }
+      }
+    }
+    if (d) {
+      let ny = today.getFullYear();
+      let occ = new Date(ny, d.month - 1, d.day).getTime();
+      if (occ < todayMs) { ny++; occ = new Date(ny, d.month - 1, d.day).getTime(); }
+      if (occ <= horizon) {
+        const years = ny - d.year;
+        items.push({ type: 'death', person_id: p.id, when: occ, mmdd: pad2(d.month)+'-'+pad2(d.day), years_since: years, label: `${years}. Todestag · ${name}` });
+      }
+    }
+  }
+  // Wedding
+  const spouses = db.prepare(`SELECT e.id, e.from_id, e.to_id, e.since, e.status, p1.given_name as g1, p1.surname as s1, p2.given_name as g2, p2.surname as s2
+    FROM edges e
+    JOIN persons p1 ON p1.id = e.from_id
+    JOIN persons p2 ON p2.id = e.to_id
+    WHERE e.type='spouse' AND e.deleted_at IS NULL AND (e.status IS NULL OR e.status IN ('married','partner','engaged')) AND e.since IS NOT NULL`).all();
+  for (const e of spouses) {
+    const s = parseIsoDay(e.since);
+    if (!s) continue;
+    let ny = today.getFullYear();
+    let occ = new Date(ny, s.month - 1, s.day).getTime();
+    if (occ < todayMs) { ny++; occ = new Date(ny, s.month - 1, s.day).getTime(); }
+    if (occ <= horizon) {
+      const years = ny - s.year;
+      const n1 = [e.g1, e.s1].filter(Boolean).join(' ');
+      const n2 = [e.g2, e.s2].filter(Boolean).join(' ');
+      items.push({ type: 'wedding', edge_id: e.id, person_id: e.from_id, partner_id: e.to_id, when: occ, mmdd: pad2(s.month)+'-'+pad2(s.day), years_since: years, label: `${years}. Hochzeitstag · ${n1} ❤ ${n2}` });
+    }
+  }
+  items.sort((a, b) => a.when - b.when);
+  res.json({ days, count: items.length, items });
+});
+
+function pad2(n) { return String(n).padStart(2, '0'); }
+
+app.get('/api/dashboard/stats', requireViewer, (_req, res) => {
+  const persons = db.prepare(`SELECT * FROM persons WHERE deleted_at IS NULL`).all();
+  const edges = db.prepare(`SELECT * FROM edges WHERE deleted_at IS NULL`).all();
+  const residences = db.prepare(`SELECT country, city FROM residences WHERE deleted_at IS NULL`).all();
+
+  const total = persons.length;
+  const deceased = persons.filter(p => p.death_date).length;
+  const living = total - deceased;
+
+  const parentOf = new Map(); // child -> [parents]
+  const childrenOf = new Map(); // parent -> [children]
+  const spouseOf = new Map();
+  for (const e of edges) {
+    if (e.type === 'parent') {
+      if (!parentOf.has(e.to_id)) parentOf.set(e.to_id, []);
+      parentOf.get(e.to_id).push(e.from_id);
+      if (!childrenOf.has(e.from_id)) childrenOf.set(e.from_id, []);
+      childrenOf.get(e.from_id).push(e.to_id);
+    } else if (e.type === 'spouse') {
+      if (!spouseOf.has(e.from_id)) spouseOf.set(e.from_id, new Set());
+      if (!spouseOf.has(e.to_id)) spouseOf.set(e.to_id, new Set());
+      spouseOf.get(e.from_id).add(e.to_id);
+      spouseOf.get(e.to_id).add(e.from_id);
+    }
+  }
+
+  // Portraits
+  const portraitIds = new Set(db.prepare(`SELECT DISTINCT person_id FROM person_images WHERE role='Portrait' AND deleted_at IS NULL`).all().map(r => r.person_id));
+
+  const noParents = persons.filter(p => !parentOf.get(p.id)?.length).map(p => p.id);
+  const noChildren = persons.filter(p => !childrenOf.get(p.id)?.length).map(p => p.id);
+  const noBirthDate = persons.filter(p => !p.birth_date).map(p => p.id);
+  const noDeathDate = persons.filter(p => p.death_date == null && !spouseOf.get(p.id)).map(p => p.id); // weak
+  const noPortrait = persons.filter(p => !portraitIds.has(p.id)).map(p => p.id);
+
+  // Couples without children: pairs that share no children
+  const seenCouples = new Set();
+  let couplesWithoutChildren = 0;
+  for (const e of edges) {
+    if (e.type !== 'spouse') continue;
+    const key = [e.from_id, e.to_id].sort().join('|');
+    if (seenCouples.has(key)) continue;
+    seenCouples.add(key);
+    const ca = new Set(childrenOf.get(e.from_id) || []);
+    const cb = new Set(childrenOf.get(e.to_id) || []);
+    let shared = 0;
+    for (const c of ca) if (cb.has(c)) shared++;
+    if (shared === 0) couplesWithoutChildren++;
+  }
+
+  // Decade histogram
+  const eventsByDecade = {};
+  for (const p of persons) {
+    const y = p.birth_date && /^\d{4}/.test(p.birth_date) ? Math.floor(parseInt(p.birth_date, 10) / 10) * 10 : null;
+    if (y) eventsByDecade[y] = (eventsByDecade[y] || 0) + 1;
+  }
+
+  // Depth via BFS from roots down
+  const depth = {};
+  const roots = persons.filter(p => !parentOf.get(p.id)?.length).map(p => p.id);
+  for (const r of roots) depth[r] = 0;
+  let changed = true, maxDepth = 0;
+  while (changed) {
+    changed = false;
+    for (const p of persons) {
+      const parents = parentOf.get(p.id) || [];
+      if (!parents.length) continue;
+      const parentDepths = parents.map(pid => depth[pid]).filter(x => x != null);
+      if (!parentDepths.length) continue;
+      const d = Math.max(...parentDepths) + 1;
+      if (depth[p.id] !== d) { depth[p.id] = d; changed = true; }
+      if (d > maxDepth) maxDepth = d;
+    }
+  }
+
+  // Name frequency
+  const givenFreq = {}, surnameFreq = {};
+  for (const p of persons) {
+    const g = (p.given_name || '').split(/\s+/)[0];
+    if (g) givenFreq[g] = (givenFreq[g] || 0) + 1;
+    const s = p.surname;
+    if (s) surnameFreq[s] = (surnameFreq[s] || 0) + 1;
+  }
+  const top = (obj, n) => Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, v]) => ({ name: k, count: v }));
+
+  // Country distribution
+  const byCountry = {};
+  for (const r of residences) {
+    const c = (r.country || 'Unbekannt').trim();
+    byCountry[c] = (byCountry[c] || 0) + 1;
+  }
+
+  // Pedigree collapse: persons who appear as ancestor of >1 descendant via different paths
+  // Simplified: count how many distinct couples share children with cross-overlap.
+  const pedigreeCollapse = []; // skip heavy compute, placeholder empty
+
+  res.json({
+    total_persons: total,
+    living,
+    deceased,
+    persons_without_birth_date: { count: noBirthDate.length, ids: noBirthDate.slice(0, 50) },
+    persons_without_death_date_if_deceased: { count: 0, ids: [] }, // noDeathDate is weak, skip
+    persons_without_parents: { count: noParents.length, ids: noParents.slice(0, 50) },
+    persons_without_children: { count: noChildren.length, ids: noChildren.slice(0, 50) },
+    persons_without_portrait: { count: noPortrait.length, ids: noPortrait.slice(0, 50) },
+    couples_without_children: couplesWithoutChildren,
+    events_by_decade: eventsByDecade,
+    generations_depth: maxDepth,
+    name_frequency: { given: top(givenFreq, 10), surname: top(surnameFreq, 10) },
+    pedigree_collapse_indicators: pedigreeCollapse,
+    by_country: byCountry,
+  });
+});
+
+/* undo / redo ----------------------------------------------------------- */
+
+const ACTION_LOG_MAX_PER_SESSION = 100;
+const ACTION_LOG_MAX_AGE_DAYS = 7;
+
+function cleanupActionLog() {
+  const cutoff = new Date(Date.now() - ACTION_LOG_MAX_AGE_DAYS * 86400000).toISOString();
+  db.prepare('DELETE FROM action_log WHERE ts < ?').run(cutoff);
+}
+try { cleanupActionLog(); } catch {}
+
+export function logAction(sessionToken, action, label) {
+  if (!sessionToken) return;
+  try {
+    db.prepare('INSERT INTO action_log (session_token, ts, action, label, undone) VALUES (?,?,?,?,0)')
+      .run(sessionToken, nowIso(), JSON.stringify(action), label || null);
+    // Trim per session
+    const rows = db.prepare('SELECT id FROM action_log WHERE session_token=? ORDER BY id DESC LIMIT 500').all(sessionToken);
+    if (rows.length > ACTION_LOG_MAX_PER_SESSION) {
+      const toDelete = rows.slice(ACTION_LOG_MAX_PER_SESSION).map(r => r.id);
+      const chunk = toDelete.slice(0, 100);
+      for (const id of chunk) db.prepare('DELETE FROM action_log WHERE id=?').run(id);
+    }
+  } catch (e) { /* best-effort */ }
+}
+
+app.get('/api/undo/stack', requireViewer, (req, res) => {
+  const token = req.cookies?.[COOKIE_NAME];
+  if (!token) return res.json({ actions: [] });
+  const rows = db.prepare('SELECT id, ts, label, action, undone FROM action_log WHERE session_token=? ORDER BY id DESC LIMIT 20').all(token);
+  res.json({ actions: rows.map(r => ({ id: r.id, ts: r.ts, label: r.label, undone: !!r.undone, type: safeJsonParse(r.action)?.type })) });
+});
+
+function safeJsonParse(s) { try { return JSON.parse(s); } catch { return null; } }
+
+function restoreRow(table, id, before) {
+  if (!before) return 0;
+  const cols = Object.keys(before);
+  const set = cols.map(c => `${c}=@${c}`).join(', ');
+  // UPSERT
+  const existing = db.prepare(`SELECT id FROM ${table} WHERE id=?`).get(id);
+  if (existing) {
+    db.prepare(`UPDATE ${table} SET ${set} WHERE id=@id`).run({ ...before, id });
+  } else {
+    const colList = cols.join(', ');
+    const placeholders = cols.map(c => `@${c}`).join(', ');
+    db.prepare(`INSERT INTO ${table} (${colList}) VALUES (${placeholders})`).run(before);
+  }
+  return 1;
+}
+
+function applyUndo(action) {
+  const a = typeof action === 'string' ? safeJsonParse(action) : action;
+  if (!a || !a.type) return { ok: false, reason: 'invalid action' };
+  // type formats: 'persons.create|update|delete', 'edges.create|...', ...
+  const [table, op] = String(a.type).split('.');
+  if (!table || !op) return { ok: false, reason: 'bad type' };
+  try {
+    if (op === 'create') {
+      // undo create = delete
+      db.prepare(`DELETE FROM ${table} WHERE id=?`).run(a.target_id);
+    } else if (op === 'update') {
+      restoreRow(table, a.target_id, a.before);
+    } else if (op === 'delete') {
+      restoreRow(table, a.target_id, a.before);
+    } else return { ok: false, reason: 'unknown op' };
+    return { ok: true };
+  } catch (e) { return { ok: false, reason: e.message }; }
+}
+
+function applyRedo(action) {
+  const a = typeof action === 'string' ? safeJsonParse(action) : action;
+  if (!a || !a.type) return { ok: false, reason: 'invalid action' };
+  const [table, op] = String(a.type).split('.');
+  try {
+    if (op === 'create') restoreRow(table, a.target_id, a.after);
+    else if (op === 'update') restoreRow(table, a.target_id, a.after);
+    else if (op === 'delete') db.prepare(`DELETE FROM ${table} WHERE id=?`).run(a.target_id);
+    else return { ok: false, reason: 'unknown op' };
+    return { ok: true };
+  } catch (e) { return { ok: false, reason: e.message }; }
+}
+
+app.post('/api/undo', requireEditor, (req, res) => {
+  const token = req.cookies?.[COOKIE_NAME];
+  if (!token) return res.status(401).json({ error: 'no session' });
+  const row = db.prepare('SELECT id, action FROM action_log WHERE session_token=? AND undone=0 ORDER BY id DESC LIMIT 1').get(token);
+  if (!row) return res.status(404).json({ error: 'nothing to undo' });
+  const r = applyUndo(row.action);
+  if (!r.ok) return res.status(500).json({ error: r.reason });
+  db.prepare('UPDATE action_log SET undone=1 WHERE id=?').run(row.id);
+  logAudit(req.auth.role, 'undo', String(row.id));
+  res.json({ ok: true, id: row.id });
+});
+
+app.post('/api/redo', requireEditor, (req, res) => {
+  const token = req.cookies?.[COOKIE_NAME];
+  if (!token) return res.status(401).json({ error: 'no session' });
+  const row = db.prepare('SELECT id, action FROM action_log WHERE session_token=? AND undone=1 ORDER BY id DESC LIMIT 1').get(token);
+  if (!row) return res.status(404).json({ error: 'nothing to redo' });
+  const r = applyRedo(row.action);
+  if (!r.ok) return res.status(500).json({ error: r.reason });
+  db.prepare('UPDATE action_log SET undone=0 WHERE id=?').run(row.id);
+  logAudit(req.auth.role, 'redo', String(row.id));
+  res.json({ ok: true, id: row.id });
 });
 
 /* health ---------------------------------------------------------------- */

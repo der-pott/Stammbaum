@@ -102,6 +102,11 @@ const api = {
   async researchConsensus(person_id) {
     return j(await fetch(`/api/persons/${person_id}/research/consensus`));
   },
+  async anniversaries(days = 30) { return j(await fetch(`/api/dashboard/anniversaries?days=${days}`)); },
+  async stats() { return j(await fetch('/api/dashboard/stats')); },
+  async undoStack() { return j(await fetch('/api/undo/stack')); },
+  async undo() { return j(await fetch('/api/undo', { method: 'POST' })); },
+  async redo() { return j(await fetch('/api/redo', { method: 'POST' })); },
 };
 function postJson(data) { return { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) }; }
 function patchJson(data) { return { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) }; }
@@ -214,8 +219,14 @@ function applyRole() {
   badge.textContent = state.role ? (state.role === 'editor' ? 'Editor' : 'Betrachter') : '';
   document.getElementById('btn-logout').hidden = !loggedIn;
   document.getElementById('fab-list').hidden = !loggedIn;
+  // Anniversaries + Stats sichtbar für alle angemeldeten (auch viewer)
+  const anv = document.getElementById('btn-anniversaries');
+  if (anv) anv.hidden = !loggedIn;
+  const st = document.getElementById('btn-stats');
+  if (st) st.hidden = !loggedIn;
   const canEdit = state.role === 'editor';
   for (const el of document.querySelectorAll('[data-editor]')) el.hidden = !canEdit;
+  if (loggedIn) startAnniversariesPolling();
 }
 
 function openLoginDialog() {
@@ -3867,15 +3878,229 @@ function escapeHtml(s) {
   const bind = () => {
     const rec = document.getElementById('btn-recycle');
     const pla = document.getElementById('btn-plausibility');
+    const anv = document.getElementById('btn-anniversaries');
+    const st  = document.getElementById('btn-stats');
+    const un  = document.getElementById('btn-undo');
     if (rec && !rec._wired) { rec._wired = true; rec.onclick = openRecycleDialog; }
     if (pla && !pla._wired) { pla._wired = true; pla.onclick = openPlausibilityDialog; }
+    if (anv && !anv._wired) { anv._wired = true; anv.onclick = openAnniversariesDialog; }
+    if (st  && !st._wired)  { st._wired  = true; st.onclick  = openStatsDialog; }
+    if (un  && !un._wired)  { un._wired  = true; un.onclick  = openUndoDialog; }
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
   else bind();
-  // Rebind after re-renders.
   const obs = new MutationObserver(bind);
   obs.observe(document.body, { childList: true, subtree: true });
 })();
+
+/* ----- Anniversaries ---------------------------------------------- */
+async function openAnniversariesDialog() {
+  const dlg = document.getElementById('anniv-dialog');
+  if (!dlg) return;
+  const daysSel = document.getElementById('anniv-days');
+  const body = document.getElementById('anniv-body');
+  const render = async () => {
+    body.textContent = 'Lade…';
+    try {
+      const data = await api.anniversaries(Number(daysSel.value));
+      body.innerHTML = '';
+      if (!data.items.length) {
+        body.appendChild(h('div', { class: 'meta' }, 'Keine anstehenden Termine in diesem Zeitraum.'));
+        return;
+      }
+      for (const it of data.items) {
+        const d = new Date(it.when);
+        const dstr = d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
+        const icon = it.type === 'wedding' ? '❤' : (it.type === 'death' ? '✝' : (it.type === 'birthday_memorial' ? '🕯' : '🎂'));
+        const row = h('div', { class: 'anniv-row' },
+          h('span', { class: 'anniv-date' }, dstr),
+          h('span', { class: 'anniv-icon' }, icon),
+          h('span', { class: 'anniv-label' }, it.label),
+        );
+        row.onclick = () => {
+          dlg.close();
+          const pid = it.person_id;
+          if (pid) { state.selected = pid; render.detail?.(); renderDetail(); }
+        };
+        body.appendChild(row);
+      }
+    } catch (e) {
+      body.textContent = 'Fehler: ' + e.message;
+    }
+  };
+  daysSel.onchange = render;
+  await render();
+  dlg.showModal();
+}
+
+async function refreshAnniversariesBadge() {
+  const badge = document.getElementById('anniv-badge');
+  const btn   = document.getElementById('btn-anniversaries');
+  if (!badge || !btn) return;
+  try {
+    const data = await api.anniversaries(7);
+    if (data.count > 0) {
+      badge.textContent = String(data.count);
+      badge.hidden = false;
+    } else {
+      badge.hidden = true;
+    }
+  } catch { /* silent */ }
+}
+
+/* ----- Stats ------------------------------------------------------ */
+async function openStatsDialog() {
+  const dlg = document.getElementById('stats-dialog');
+  const body = document.getElementById('stats-body');
+  if (!dlg || !body) return;
+  body.textContent = 'Lade…';
+  try {
+    const s = await api.stats();
+    body.innerHTML = '';
+    const tiles = h('div', { class: 'stats-tiles' },
+      statTile('Personen', s.total_persons),
+      statTile('Lebend', s.living),
+      statTile('Verstorben', s.deceased),
+      statTile('Generationen tief', s.generations_depth),
+      statTile('Ohne Geburtsdatum', s.persons_without_birth_date.count),
+      statTile('Ohne Eltern', s.persons_without_parents.count),
+      statTile('Ohne Kinder', s.persons_without_children.count),
+      statTile('Ohne Portrait', s.persons_without_portrait.count),
+      statTile('Paare ohne Kinder', s.couples_without_children),
+    );
+    body.appendChild(tiles);
+    // Top names
+    const names = h('div', { class: 'stats-section' },
+      h('h4', {}, 'Häufigste Namen'),
+      h('div', { class: 'stats-cols' },
+        h('div', {},
+          h('div', { class: 'stats-sub' }, 'Vornamen'),
+          ...s.name_frequency.given.map(x => h('div', { class: 'stats-row' }, `${x.name} · ${x.count}`)),
+        ),
+        h('div', {},
+          h('div', { class: 'stats-sub' }, 'Nachnamen'),
+          ...s.name_frequency.surname.map(x => h('div', { class: 'stats-row' }, `${x.name} · ${x.count}`)),
+        ),
+      ),
+    );
+    body.appendChild(names);
+    // Decade histogram
+    const decades = Object.entries(s.events_by_decade).sort((a, b) => a[0] - b[0]);
+    if (decades.length) {
+      const max = Math.max(...decades.map(d => d[1]));
+      const hist = h('div', { class: 'stats-section' },
+        h('h4', {}, 'Geburten pro Jahrzehnt'),
+        h('div', { class: 'stats-hist' },
+          ...decades.map(([dec, cnt]) => {
+            const bar = h('div', { class: 'stats-bar', style: `width:${Math.round(cnt / max * 100)}%` }, '');
+            return h('div', { class: 'stats-hist-row' },
+              h('span', { class: 'stats-hist-label' }, dec),
+              bar,
+              h('span', { class: 'stats-hist-cnt' }, String(cnt)),
+            );
+          }),
+        ),
+      );
+      body.appendChild(hist);
+    }
+    // Countries
+    const countries = Object.entries(s.by_country).sort((a, b) => b[1] - a[1]);
+    if (countries.length) {
+      body.appendChild(h('div', { class: 'stats-section' },
+        h('h4', {}, 'Wohnorte nach Land'),
+        h('div', { class: 'stats-country-list' },
+          ...countries.map(([c, n]) => h('span', { class: 'stats-country' }, `${c} · ${n}`)),
+        ),
+      ));
+    }
+  } catch (e) {
+    body.textContent = 'Fehler: ' + e.message;
+  }
+  dlg.showModal();
+}
+function statTile(label, value) {
+  return h('div', { class: 'stat-tile' },
+    h('div', { class: 'stat-value' }, String(value ?? '—')),
+    h('div', { class: 'stat-label' }, label),
+  );
+}
+
+/* ----- Undo / Redo ------------------------------------------------ */
+async function openUndoDialog() {
+  const dlg = document.getElementById('undo-dialog');
+  const body = document.getElementById('undo-body');
+  if (!dlg || !body) return;
+  body.textContent = 'Lade…';
+  try {
+    const data = await api.undoStack();
+    body.innerHTML = '';
+    if (!data.actions.length) {
+      body.appendChild(h('div', { class: 'meta' }, 'Noch keine Aktionen in dieser Sitzung.'));
+    } else {
+      for (const a of data.actions) {
+        const dt = new Date(a.ts).toLocaleTimeString('de-DE');
+        body.appendChild(h('div', { class: 'undo-row' + (a.undone ? ' is-undone' : '') },
+          h('span', { class: 'undo-time' }, dt),
+          h('span', { class: 'undo-label' }, (a.label || a.type || 'Aktion') + (a.undone ? ' (rückgängig)' : '')),
+        ));
+      }
+    }
+  } catch (e) {
+    body.textContent = 'Fehler: ' + e.message;
+  }
+  dlg.showModal();
+}
+
+async function doUndo() {
+  if (state.role !== 'editor') return;
+  try {
+    await api.undo();
+    toast('↶ Letzte Aktion rückgängig', 'ok');
+    await reload();
+    renderDetail();
+  } catch (e) {
+    toast(e.message || 'Nichts zum Rückgängig-Machen', 'err');
+  }
+}
+async function doRedo() {
+  if (state.role !== 'editor') return;
+  try {
+    await api.redo();
+    toast('↷ Aktion wiederhergestellt', 'ok');
+    await reload();
+    renderDetail();
+  } catch (e) {
+    toast(e.message || 'Nichts zum Wiederherstellen', 'err');
+  }
+}
+window.addEventListener('keydown', (ev) => {
+  if (state.role !== 'editor') return;
+  if (ev.target && (ev.target.tagName === 'INPUT' || ev.target.tagName === 'TEXTAREA' || ev.target.isContentEditable)) return;
+  const mod = ev.metaKey || ev.ctrlKey;
+  if (!mod) return;
+  if (ev.key === 'z' && !ev.shiftKey) { ev.preventDefault(); doUndo(); }
+  else if ((ev.key === 'z' && ev.shiftKey) || ev.key === 'y') { ev.preventDefault(); doRedo(); }
+});
+
+/* ----- Toasts ----------------------------------------------------- */
+function toast(msg, kind = 'ok') {
+  const host = document.getElementById('toasts');
+  if (!host) return;
+  const el = h('div', { class: `toast toast-${kind}` }, msg);
+  host.appendChild(el);
+  setTimeout(() => { el.classList.add('fade'); setTimeout(() => el.remove(), 300); }, 3500);
+}
+
+/* ----- Periodic badge refresh ------------------------------------ */
+let _annivTimer = null;
+function startAnniversariesPolling() {
+  refreshAnniversariesBadge();
+  if (_annivTimer) clearInterval(_annivTimer);
+  _annivTimer = setInterval(refreshAnniversariesBadge, 10 * 60 * 1000);
+}
+document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(() => { if (state.role) startAnniversariesPolling(); }, 1500);
+});
 
 /* --- Refresh places datalist on dialogs open ---------------------- */
 (function wirePlacesAutocomplete() {
