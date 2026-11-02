@@ -10,7 +10,7 @@ export async function search(person) {
   if (!surname) return [];
   const q = full || surname;
   const url = `https://www.arcinsys.hessen.de/arcinsys/recherche/overview.action?q=${encodeURIComponent(q)}`;
-  const r = await httpGet('arcinsys', url, { accept: 'text', browser: true });
+  const r = await httpGet('arcinsys', url, { accept: 'text' });
   if (!r.ok) return [{ source: 'arcinsys', title: 'Arcinsys', url, snippet: `Zugriff nicht möglich (${r.error})`, confidence: 0, payload: { error: r.error } }];
   try {
     const $ = cheerio.load(r.body);

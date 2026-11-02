@@ -7,7 +7,7 @@ export async function search(person) {
   const { full } = nameParts(person);
   if (!full) return [];
   const url = `https://viaf.org/viaf/AutoSuggest?query=${encodeURIComponent(full)}`;
-  const r = await httpGet('viaf', url, { accept: 'json', browser: true });
+  const r = await httpGet('viaf', url, { accept: 'json' });
   if (!r.ok) return [{ source: 'viaf', title: 'VIAF', url, snippet: `Zugriff nicht möglich (${r.error})`, confidence: 0, payload: { error: r.error } }];
   const results = r.body?.result || [];
   if (!results.length) return [{ source: 'viaf', title: 'VIAF', url, snippet: 'Keine Normdaten-Treffer.', confidence: 0, payload: { empty: true } }];

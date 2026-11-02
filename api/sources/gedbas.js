@@ -10,7 +10,7 @@ export async function search(person) {
   if (!surname) return [];
   // GEDBAS uses POST + nested name params. We hit the HTML search page.
   const url = `https://gedbas.genealogy.net/search/simple?lastname=${encodeURIComponent(surname)}&firstname=${encodeURIComponent(firstGiven || '')}`;
-  const r = await httpGet('gedbas', url, { accept: 'text', browser: true });
+  const r = await httpGet('gedbas', url, { accept: 'text' });
   if (!r.ok) return [{ source: 'gedbas', title: 'GEDBAS', url, snippet: `Zugriff nicht möglich (${r.error})`, confidence: 0, payload: { error: r.error } }];
   try {
     const $ = cheerio.load(r.body);

@@ -12,7 +12,7 @@ export async function search(person) {
   const dYear = yearOf(person.death_date);
   if (dYear) { params.set('death_year', String(dYear)); params.set('death_year2', String(dYear)); }
   const url = `https://billiongraves.com/search/results?${params.toString()}`;
-  const r = await httpGet('billiongraves', url, { accept: 'text', browser: true });
+  const r = await httpGet('billiongraves', url, { accept: 'text' });
   if (!r.ok) return [{ source: 'billiongraves', title: 'BillionGraves', url, snippet: `Zugriff nicht möglich (${r.error})`, confidence: 0, payload: { error: r.error } }];
   try {
     const $ = cheerio.load(r.body);
