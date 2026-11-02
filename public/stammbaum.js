@@ -449,6 +449,36 @@ function computeLayout() {
     }
   }
 
+  // Implied spouse edges — two persons share ≥1 child but have no explicit
+  // spouse-edge in the DB. Add a virtual edge with status='implied' so they
+  // become eligible for the mutual-primary couple rule and render as a
+  // (dashed) couple. UI treats them as a soft suggestion.
+  const impliedSpouseEdges = new Set();  // "a|b" keys of implied edges
+  for (const p of state.persons) {
+    const kids = childOf.get(p.id) || [];
+    for (const k of kids) {
+      const otherParents = (parentOf.get(k) || []).filter(x => x !== p.id);
+      for (const o of otherParents) {
+        if (p.id === o) continue;
+        if (spouseOf.get(p.id)?.has(o)) continue;  // already has explicit spouse edge
+        const key = p.id < o ? `${p.id}|${o}` : `${o}|${p.id}`;
+        if (spouseEdges.has(key)) continue;
+        if (impliedSpouseEdges.has(key)) continue;
+        impliedSpouseEdges.add(key);
+        spouseOf.get(p.id)?.add(o);
+        spouseOf.get(o)?.add(p.id);
+        spouseEdges.set(key, {
+          type: 'spouse',
+          from_id: p.id,
+          to_id: o,
+          status: 'implied',
+          since: null, until: null,
+          _implied: true,
+        });
+      }
+    }
+  }
+
   const personById = new Map(state.persons.map(p => [p.id, p]));
 
   // --- generation assignment (depth from oldest ancestor) --------------
@@ -632,41 +662,57 @@ function computeLayout() {
       default:         return 1;
     }
   }
+  // Satellite ordering + bidirectional placement.
+  //
+  // Each sat sits on one of two sides:
+  //  - right side: current / active relationships (status weight 0: married,
+  //    partner, engaged, no status) — "current partner closest" first
+  //  - left side: ended relationships (divorced, widowed) — "most-recent ex
+  //    closest" first
+  //
+  // Within each side, order strictly by `edge.since` DESC — newest closest to
+  // anchor, oldest furthest out. This keeps the Max–Vanessa–Max–Julia pattern
+  // visually clean because current partner and bio co-parent (if divorced)
+  // sit on opposite sides of the anchor, so the drop line to the shared
+  // child has an unobstructed vertical path.
   const slotByAnchor = new Map();
   for (const a of isAnchor) {
-    const sats = [];
-    for (const [sid, aid] of satelliteOf) if (aid === a) sats.push(sid);
-    // Satellite order with two conflicting user requests:
-    //  (1) current/active relationships closer to anchor, ended further out
-    //  (2) biological co-parent (shared-kid partner) needs to sit between
-    //      anchor and children-drop so the drop line emerges from a clean
-    //      midpoint (not through another sat's position).
-    //
-    // Compromise: shared-children partners (biological co-parents) always
-    // sit INNER. If multiple shared-kid partners exist, order those by
-    // status weight (current < ended) then by `since` desc. Non-shared sats
-    // sit OUTER, same sub-sort.
-    const hasSharedKids = (satId) => sharedChildrenList(a, satId).length > 0;
-    sats.sort((x, y) => {
-      const bioX = hasSharedKids(x), bioY = hasSharedKids(y);
-      if (bioX && !bioY) return -1;
-      if (bioY && !bioX) return 1;
+    const allSats = [];
+    for (const [sid, aid] of satelliteOf) if (aid === a) allSats.push(sid);
+    const rightSats = [];
+    const leftSats = [];
+    for (const sid of allSats) {
+      const key = a < sid ? `${a}|${sid}` : `${sid}|${a}`;
+      const edge = spouseEdges.get(key);
+      const w = statusWeight(edge?.status);
+      if (w === 0) rightSats.push(sid);
+      else leftSats.push(sid);
+    }
+    const sorter = (x, y) => {
       const kx = a < x ? `${a}|${x}` : `${x}|${a}`;
       const ky = a < y ? `${a}|${y}` : `${y}|${a}`;
       const ex = spouseEdges.get(kx);
       const ey = spouseEdges.get(ky);
-      const wx = statusWeight(ex?.status);
-      const wy = statusWeight(ey?.status);
-      if (wx !== wy) return wx - wy;
+      // Newer `since` first (inner).
       const sx = ex?.since || '';
       const sy = ey?.since || '';
       if (sx !== sy) return sy.localeCompare(sx);
       const bx = year(personById.get(x)?.birth_date) || '9999';
       const by = year(personById.get(y)?.birth_date) || '9999';
       return bx.localeCompare(by);
+    };
+    rightSats.sort(sorter);  // index 0 = innermost on right
+    leftSats.sort(sorter);   // index 0 = innermost on left
+    const totalSats = rightSats.length + leftSats.length;
+    const width = NODE_W + totalSats * (MARRIAGE_GAP + NODE_W);
+    // Offset of anchor center from slot left edge (so sibling placement can
+    // position the child-anchor cx correctly even with left-sats present).
+    const anchorOffset = leftSats.length * (NODE_W + MARRIAGE_GAP) + NODE_W / 2;
+    slotByAnchor.set(a, {
+      anchorId: a,
+      satellites: [...leftSats, ...rightSats],  // kept for legacy iteration
+      leftSats, rightSats, anchorOffset, width,
     });
-    const width = NODE_W + sats.length * (MARRIAGE_GAP + NODE_W);
-    slotByAnchor.set(a, { anchorId: a, satellites: sats, width });
   }
 
   // --- children-of-slot ---
@@ -748,18 +794,27 @@ function computeLayout() {
 
   // --- place slots top-down -------------------------------------------
   // Each slot has: anchorX, satelliteXs (one per satellite), y
-  const slotPos = new Map();   // anchorId -> {anchorCx, satelliteCxs: [], y}
+  const slotPos = new Map();   // anchorId -> {anchorCx, satCx: Map<satId, cx>, y, slotLeftX, width}
 
   const marginL = 80, marginT = 80, marginB = 60, marginR = 80;
 
   function placeSlotAt(a, slotLeftX, y) {
     const slot = slotByAnchor.get(a);
-    const anchorCx = slotLeftX + NODE_W / 2;
-    const satCxs = [];
-    for (let i = 0; i < slot.satellites.length; i++) {
-      satCxs.push(slotLeftX + NODE_W + (i + 1) * MARRIAGE_GAP + i * NODE_W + NODE_W / 2);
+    const satCx = new Map();
+    // Left sats placed outer→inner, left to right.
+    const leftOuterToInner = [...slot.leftSats].reverse();
+    let cursor = slotLeftX;
+    for (const sid of leftOuterToInner) {
+      satCx.set(sid, cursor + NODE_W / 2);
+      cursor += NODE_W + MARRIAGE_GAP;
     }
-    slotPos.set(a, { anchorCx, satelliteCxs: satCxs, y, slotLeftX, width: slot.width });
+    const anchorCx = cursor + NODE_W / 2;
+    cursor += NODE_W + MARRIAGE_GAP;
+    for (const sid of slot.rightSats) {
+      satCx.set(sid, cursor + NODE_W / 2);
+      cursor += NODE_W + MARRIAGE_GAP;
+    }
+    slotPos.set(a, { anchorCx, satCx, y, slotLeftX, width: slot.width });
   }
 
   function shiftSubtree(a, dx, visited = new Set()) {
@@ -768,7 +823,7 @@ function computeLayout() {
     const pos = slotPos.get(a);
     if (!pos) return;
     pos.anchorCx += dx;
-    pos.satelliteCxs = pos.satelliteCxs.map(x => x + dx);
+    for (const [k, v] of pos.satCx) pos.satCx.set(k, v + dx);
     pos.slotLeftX += dx;
     const kids = childSlotsOfAnchor.get(a) || [];
     for (const c of kids) shiftSubtree(c, dx, visited);
@@ -785,27 +840,20 @@ function computeLayout() {
     if (!kids.length) return;
 
     // Place child slots sequentially left-to-right (slot.leftX of next
-    // follows slot.rightX of previous + SIBLING_GAP). This gives each
-    // child its own slot-width worth of space (anchor + satellites).
+    // follows slot.rightX of previous + SIBLING_GAP). Each child slot may
+    // have left-sats, so its anchor sits at child.slotLeftX + child.anchorOffset.
     const childLefts = [];
     const childAnchorCxs = [];
-    let cursor = 0;  // arbitrary origin; we'll shift the whole group later
+    let cursor = 0;
     for (const c of kids) {
-      const w = slotByAnchor.get(c).width;
+      const cSlot = slotByAnchor.get(c);
       childLefts.push(cursor);
-      childAnchorCxs.push(cursor + NODE_W / 2);
-      cursor += w + SIBLING_GAP;
+      childAnchorCxs.push(cursor + cSlot.anchorOffset);
+      cursor += cSlot.width + SIBLING_GAP;
     }
 
-    // Center the ANCHORS group under the appropriate parent-midpoint.
-    // For a slot with a single co-parent-with-children (the common case), use
-    // the (anchor, co-parent) midpoint. If there are multiple co-parents with
-    // children, we have to pick one; for now use the midpoint between the
-    // two outermost anchor-cxs so the group is centered under the slot itself.
-    //
-    // Build target: find the dominant co-parent (satellite with most shared
-    // kids). Drop line comes from (anchor + co-parent)/2 if co-parent is in
-    // this slot's satellites.
+    // Drop target: center of (anchor, bio co-parent) if co-parent sits in
+    // this slot's satellites; else fall back to anchor center.
     const kidsByCoparent = new Map();
     for (const c of kids) {
       const pars = parentOf.get(c) || [];
@@ -813,17 +861,14 @@ function computeLayout() {
       if (!kidsByCoparent.has(other)) kidsByCoparent.set(other, []);
       kidsByCoparent.get(other).push(c);
     }
-    // Dominant group = largest count
     let dominant = null, bestCount = -1;
     for (const [cop, list] of kidsByCoparent) {
       if (list.length > bestCount) { bestCount = list.length; dominant = cop; }
     }
     let targetCx;
-    if (dominant && slot.satellites.includes(dominant)) {
-      const idx = slot.satellites.indexOf(dominant);
-      targetCx = (sPos.anchorCx + sPos.satelliteCxs[idx]) / 2;
+    if (dominant && sPos.satCx.has(dominant)) {
+      targetCx = (sPos.anchorCx + sPos.satCx.get(dominant)) / 2;
     } else {
-      // Solo or cross-tree co-parent — center under the anchor.
       targetCx = sPos.anchorCx;
     }
 
@@ -864,11 +909,9 @@ function computeLayout() {
   }
 
   for (const [a, pos] of slotPos) {
-    makeNode(a, pos.anchorCx - NODE_W / 2, pos.y);
-    const slot = slotByAnchor.get(a);
-    for (let i = 0; i < slot.satellites.length; i++) {
-      const sid = slot.satellites[i];
-      makeNode(sid, pos.satelliteCxs[i] - NODE_W / 2, pos.y);
+    makeNode(a, Math.round(pos.anchorCx - NODE_W / 2), pos.y);
+    for (const [sid, cx] of pos.satCx) {
+      makeNode(sid, Math.round(cx - NODE_W / 2), pos.y);
     }
   }
 
@@ -897,7 +940,7 @@ function computeLayout() {
   for (const n of nodes) { n.x += shift; n.cx += shift; }
   for (const [, pos] of slotPos) {
     pos.anchorCx += shift;
-    pos.satelliteCxs = pos.satelliteCxs.map(x => x + shift);
+    for (const [k, v] of pos.satCx) pos.satCx.set(k, v + shift);
     pos.slotLeftX += shift;
   }
 
@@ -1002,6 +1045,7 @@ function renderTree() {
       case 'widowed':  return { symbol: '❤', cls: 'edge-glyph widowed',  label: 'verwitwet'  };
       case 'engaged':  return { symbol: '◯', cls: 'edge-glyph engaged',  label: 'verlobt'    };
       case 'partner':  return { symbol: '∞', cls: 'edge-glyph partner',  label: 'Partner'    };
+      case 'implied':  return { symbol: '?', cls: 'edge-glyph implied',  label: 'vermutet'   };
       case 'married':
       default:         return { symbol: '❤', cls: 'edge-glyph married',  label: null         };
     }
@@ -1058,17 +1102,33 @@ function renderTree() {
     }
   }
   for (const [anchorId, slot] of slotByAnchor) {
-    if (!slot.satellites.length) continue;
     const anchorNode = posById.get(anchorId);
     if (!anchorNode) continue;
-    let prev = anchorNode;
-    for (const satId of slot.satellites) {
-      const satNode = posById.get(satId);
-      if (!satNode) continue;
-      const k = anchorId < satId ? `${anchorId}|${satId}` : `${satId}|${anchorId}`;
-      const edge = spouseEdgeMap.get(k);
-      drawSpouseSegment(prev, satNode, edge);
-      prev = satNode;
+    // Right side: anchor → innermost right sat → next right sat → …
+    {
+      let prev = anchorNode;
+      for (const satId of slot.rightSats) {
+        const satNode = posById.get(satId);
+        if (!satNode) continue;
+        const k = anchorId < satId ? `${anchorId}|${satId}` : `${satId}|${anchorId}`;
+        const edge = spouseEdgeMap.get(k) || state.layout.spouseEdges.get(k);
+        drawSpouseSegment(prev, satNode, edge);
+        prev = satNode;
+      }
+    }
+    // Left side: anchor → innermost left sat → next left sat → …
+    // Here "innermost left sat" is to the LEFT of the anchor. drawSpouseSegment
+    // expects leftNode, rightNode args — so pass sat first then anchor.
+    {
+      let prev = anchorNode;
+      for (const satId of slot.leftSats) {
+        const satNode = posById.get(satId);
+        if (!satNode) continue;
+        const k = anchorId < satId ? `${anchorId}|${satId}` : `${satId}|${anchorId}`;
+        const edge = spouseEdgeMap.get(k) || state.layout.spouseEdges.get(k);
+        drawSpouseSegment(satNode, prev, edge);
+        prev = satNode;
+      }
     }
   }
 
@@ -1133,24 +1193,22 @@ function renderTree() {
     const slot = slotByAnchor.get(g.anchorId);
     const sPos = slotPos.get(g.anchorId);
     let parentCx = anchorNode.cx;
-    if (g.coparentId && slot && sPos) {
-      const satIdx = slot.satellites.indexOf(g.coparentId);
-      if (satIdx >= 0) {
-        parentCx = (sPos.anchorCx + sPos.satelliteCxs[satIdx]) / 2;
-      }
+    if (g.coparentId && slot && sPos && sPos.satCx.has(g.coparentId)) {
+      parentCx = Math.round((sPos.anchorCx + sPos.satCx.get(g.coparentId)) / 2);
     }
     const childTopY = kidsNodes[0].y;
-    const barY = (parentY + PARENT_STUB + childTopY - CHILD_STUB) / 2;
+    const barY = Math.round((parentY + PARENT_STUB + childTopY - CHILD_STUB) / 2);
 
-    // Drop from parent-midpoint down to barY
+    // Drop from parent-midpoint down to barY (pixel-aligned).
+    const px = Math.round(parentCx);
     const drop = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    drop.setAttribute('d', `M${parentCx},${parentY + 2} V${barY}`);
+    drop.setAttribute('d', `M${px},${parentY + 2} V${barY}`);
     drop.setAttribute('class', 'edge-parent');
     edgeG.appendChild(drop);
 
     // Horizontal sibling bar
-    const minCx = Math.min(parentCx, ...kidsNodes.map(k => k.cx));
-    const maxCx = Math.max(parentCx, ...kidsNodes.map(k => k.cx));
+    const minCx = Math.round(Math.min(px, ...kidsNodes.map(k => k.cx)));
+    const maxCx = Math.round(Math.max(px, ...kidsNodes.map(k => k.cx)));
     if (maxCx > minCx) {
       const bar = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       bar.setAttribute('d', `M${minCx},${barY} H${maxCx}`);
@@ -1159,14 +1217,16 @@ function renderTree() {
     }
     for (const kid of kidsNodes) {
       const vert = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      vert.setAttribute('d', `M${kid.cx},${barY} V${kid.y - 2}`);
+      vert.setAttribute('d', `M${Math.round(kid.cx)},${barY} V${kid.y - 2}`);
       vert.setAttribute('class', 'edge-parent');
       edgeG.appendChild(vert);
     }
   }
 
   // Parent edges not drawn above (satellite → own child, or cross-tree):
-  // dashed arc.
+  // dashed arc. Dedupe: when a child has two remote parents that sit in a
+  // slot together (anchor + sat), draw ONE arc from couple midpoint instead
+  // of two separate arcs.
   const drawnParent = new Set();
   for (const anchorId of slotByAnchor.keys()) {
     const kids = childSlotsOfAnchor.get(anchorId) || [];
@@ -1176,15 +1236,51 @@ function renderTree() {
       for (const s of slot.satellites) drawnParent.add(`${s}|${c}`);
     }
   }
+  // Group remote parent-edges per child.
+  const remoteByChild = new Map();  // childId → [parentId]
   for (const e of state.edges) {
     if (e.type !== 'parent') continue;
     if (drawnParent.has(`${e.from_id}|${e.to_id}`)) continue;
     const na = posById.get(e.from_id), nb = posById.get(e.to_id);
     if (!na || !nb) continue;
+    if (!remoteByChild.has(e.to_id)) remoteByChild.set(e.to_id, []);
+    remoteByChild.get(e.to_id).push(e.from_id);
+  }
+  function drawRemoteArc(fromCx, fromY, nb) {
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('d', `M${na.cx},${na.y + AVATAR_R * 2} C${na.cx},${na.y + 160} ${nb.cx},${nb.y - 100} ${nb.cx},${nb.y}`);
+    const sx = Math.round(fromCx), sy = Math.round(fromY);
+    const ex = Math.round(nb.cx), ey = Math.round(nb.y);
+    path.setAttribute('d', `M${sx},${sy} C${sx},${sy + 100} ${ex},${ey - 100} ${ex},${ey}`);
     path.setAttribute('class', 'edge-parent-remote');
     edgeG.appendChild(path);
+  }
+  for (const [childId, parentIds] of remoteByChild) {
+    const nb = posById.get(childId);
+    if (!nb) continue;
+    // Try to find a slot containing two of these parents (one as anchor, one
+    // in satCx). Draw one arc from the (anchor, sat) midpoint.
+    let consolidated = false;
+    for (const pA of parentIds) {
+      const sPos = slotPos.get(pA);
+      if (!sPos) continue;
+      for (const pB of parentIds) {
+        if (pA === pB) continue;
+        if (!sPos.satCx.has(pB)) continue;
+        const midCx = (sPos.anchorCx + sPos.satCx.get(pB)) / 2;
+        const fromY = sPos.y + AVATAR_R * 2;
+        drawRemoteArc(midCx, fromY, nb);
+        consolidated = true;
+        break;
+      }
+      if (consolidated) break;
+    }
+    if (consolidated) continue;
+    // Fallback: individual arc per parent.
+    for (const pId of parentIds) {
+      const na = posById.get(pId);
+      if (!na) continue;
+      drawRemoteArc(na.cx, na.y + AVATAR_R * 2, nb);
+    }
   }
 
   root.appendChild(edgeG);

@@ -343,10 +343,17 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
 .edge-spouse-remote.status-partner {
   stroke-dasharray: 6 3;
 }
+.edge-spouse.status-implied,
+.edge-spouse-remote.status-implied {
+  stroke: var(--ink-faint);
+  stroke-dasharray: 2 4;
+  opacity: 0.6;
+}
 
 .edge-glyph.widowed { fill: var(--ink-faint); }
 .edge-glyph.engaged { fill: var(--ink-soft); font-size: 11px; }
 .edge-glyph.partner { fill: var(--ink); font-size: 16px; font-weight: 500; }
+.edge-glyph.implied { fill: var(--ink-faint); font-size: 12px; font-style: italic; }
 
 /* Two short slashes across the marriage line → divorce */
 .edge-slash {
