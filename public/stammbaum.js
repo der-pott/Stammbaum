@@ -1313,6 +1313,7 @@ function renderDetail() {
   el.appendChild(famSection);
 
   // ---- Beruf & Karriere ---------------------------------------------
+  el.appendChild(subSection('education', 'Ausbildung & Studium', p.id, renderEducation));
   el.appendChild(subSection('jobs', 'Beruf & Karriere', p.id, renderJob));
   // ---- Wohnorte -----------------------------------------------------
   el.appendChild(subSection('residences', 'Wohnorte', p.id, renderResidence));
@@ -1507,6 +1508,16 @@ function renderJob(j) {
     j.notes ? h('div', { class: 'sub-note' }, j.notes) : null,
   );
 }
+function renderEducation(e) {
+  const titleLine = [e.institution, e.degree].filter(Boolean).join(' · ') || 'Ausbildung';
+  const subLine   = [e.field, e.place].filter(Boolean).join(' · ');
+  return h('div', { class: 'sub-row' },
+    h('div', { class: 'sub-title' }, titleLine),
+    h('div', { class: 'sub-sub' }, subLine),
+    h('div', { class: 'sub-range' }, fmtRange(e.start_date, e.end_date)),
+    e.notes ? h('div', { class: 'sub-note' }, e.notes) : null,
+  );
+}
 function renderResidence(r) {
   return h('div', { class: 'sub-row' },
     h('div', { class: 'sub-title' }, r.place),
@@ -1539,6 +1550,15 @@ function renderHealth(e) {
 }
 
 const SUB_FIELDS = {
+  education: [
+    { name: 'institution', label: 'Einrichtung', type: 'text', placeholder: 'Schule, Universität, Lehrbetrieb' },
+    { name: 'field',       label: 'Fach / Bereich', type: 'text', placeholder: 'z. B. Elektrotechnik, Jura, Tischler' },
+    { name: 'degree',      label: 'Abschluss',   type: 'text', placeholder: 'Abitur, Diplom, Gesellenbrief …' },
+    { name: 'place',       label: 'Ort',         type: 'text' },
+    { name: 'start_date',  label: 'von',         type: 'text', placeholder: 'TT.MM.JJJJ' },
+    { name: 'end_date',    label: 'bis',         type: 'text', placeholder: 'TT.MM.JJJJ' },
+    { name: 'notes',       label: 'Notiz',       type: 'textarea' },
+  ],
   jobs: [
     { name: 'title',      label: 'Position',   type: 'text' },
     { name: 'employer',   label: 'Arbeitgeber', type: 'text' },
@@ -1581,7 +1601,7 @@ function openSubDialog(kind, personId, existing = null) {
   const dlg = document.getElementById('sub-dialog') || createSubDialog();
   const form = dlg.querySelector('form');
   form.innerHTML = '';
-  const title = { jobs: 'Beruf', residences: 'Wohnort', military: 'Militärdienst', anecdotes: 'Anekdote', 'health-events': 'Gesundheitseintrag' }[kind];
+  const title = { jobs: 'Beruf', education: 'Ausbildung / Studium', residences: 'Wohnort', military: 'Militärdienst', anecdotes: 'Anekdote', 'health-events': 'Gesundheitseintrag' }[kind];
   const isEdit = !!existing;
   form.appendChild(h('h2', { class: 'dlg-title' }, (isEdit ? 'Eintrag bearbeiten · ' : 'Neuer Eintrag · ') + title));
   const fields = SUB_FIELDS[kind] || [];

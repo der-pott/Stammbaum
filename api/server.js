@@ -558,6 +558,7 @@ const SUB_RESOURCES = {
   military:          { table: 'military_service', cols: ['branch','rank','unit','start_date','end_date','campaigns','notes'], order: 'COALESCE(start_date, created_at)' },
   anecdotes:         { table: 'anecdotes',        cols: ['title','text','source','year'], order: 'COALESCE(year, created_at)' },
   'health-events':   { table: 'health_events',    cols: ['condition','date','hereditary','notes'], editorOnlyRead: true, order: 'COALESCE(date, created_at)' },
+  education:         { table: 'education',        cols: ['institution','field','degree','place','start_date','end_date','notes'], order: 'COALESCE(start_date, created_at)' },
 };
 
 function sanitizeSub(cfg, body) {
@@ -633,6 +634,7 @@ function gatherBioContext(personId) {
     }
   }
   const jobs       = db.prepare('SELECT * FROM jobs WHERE person_id=? ORDER BY start_date').all(personId);
+  const education  = db.prepare('SELECT * FROM education WHERE person_id=? ORDER BY start_date').all(personId);
   const residences = db.prepare('SELECT * FROM residences WHERE person_id=? ORDER BY start_date').all(personId);
   const anecdotes  = db.prepare('SELECT * FROM anecdotes WHERE person_id=? ORDER BY year').all(personId);
   const military   = db.prepare('SELECT * FROM military_service WHERE person_id=? ORDER BY start_date').all(personId);
@@ -641,7 +643,7 @@ function gatherBioContext(personId) {
     SELECT i.caption, pi.role FROM images i JOIN person_images pi ON pi.image_id=i.id
     WHERE pi.person_id=? AND i.caption IS NOT NULL
   `).all(personId).map(r => [r.role, r.caption].filter(Boolean).join(': '));
-  return { person, parents, spouses, children, siblings, jobs, residences, anecdotes, military, health, docCaptions };
+  return { person, parents, spouses, children, siblings, jobs, education, residences, anecdotes, military, health, docCaptions };
 }
 
 app.get('/api/persons/:id/biography', requireViewer, (req, res) => {

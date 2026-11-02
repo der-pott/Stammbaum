@@ -4,7 +4,7 @@
 const MODEL = process.env.ANTHROPIC_BIO_MODEL || 'claude-opus-4-7';
 
 export function buildBioPrompt(ctx) {
-  const { person, parents, spouses, children, siblings, jobs, residences, anecdotes, military, health, docCaptions } = ctx;
+  const { person, parents, spouses, children, siblings, jobs, education, residences, anecdotes, military, health, docCaptions } = ctx;
 
   const facts = [];
   const fullName = [person.given_name, person.surname].filter(Boolean).join(' ') || '(ohne Namen)';
@@ -28,6 +28,13 @@ export function buildBioPrompt(ctx) {
   if (siblings?.length)  facts.push('Geschwister: ' + siblings.map(fmtRel).join('; '));
   if (children?.length)  facts.push('Kinder: ' + children.map(fmtRel).join('; '));
 
+  if (education?.length) {
+    const e = education.map(x => [
+      x.institution, x.field && 'Fach: ' + x.field, x.degree && 'Abschluss: ' + x.degree,
+      x.place, [x.start_date, x.end_date].filter(Boolean).join('–'),
+    ].filter(Boolean).join(' ')).filter(Boolean);
+    if (e.length) facts.push('Ausbildung / Studium: ' + e.join('; '));
+  }
   if (jobs?.length) {
     const j = jobs.map(x => [
       x.title, x.employer && 'bei ' + x.employer,

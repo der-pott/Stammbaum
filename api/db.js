@@ -140,6 +140,19 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_anec_person ON anecdotes(person_id);
 
+  CREATE TABLE IF NOT EXISTS education (
+    id          TEXT PRIMARY KEY,
+    person_id   TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    institution TEXT,
+    field       TEXT,
+    degree      TEXT,
+    place       TEXT,
+    start_date  TEXT, end_date TEXT,
+    notes       TEXT,
+    created_at  TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_edu_person ON education(person_id);
+
   CREATE TABLE IF NOT EXISTS biographies (
     person_id    TEXT PRIMARY KEY REFERENCES persons(id) ON DELETE CASCADE,
     narrative    TEXT NOT NULL,
