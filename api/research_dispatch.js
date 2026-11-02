@@ -21,6 +21,14 @@ import * as volksbund from './sources/volksbund.js';
 import * as stolpersteine from './sources/stolpersteine.js';
 import * as wikipedia_en from './sources/wikipedia_en.js';
 import * as archive_org from './sources/archive_org.js';
+import * as duckduckgo from './sources/duckduckgo.js';
+import * as linkedin from './sources/linkedin.js';
+import * as xing from './sources/xing.js';
+import * as press from './sources/press.js';
+import * as reddit from './sources/reddit.js';
+import * as github from './sources/github.js';
+import * as googlebooks from './sources/googlebooks.js';
+import * as mastodon from './sources/mastodon.js';
 
 export const SOURCES = {
   wikidata:      { label: 'Wikidata / Wikipedia (DE)', impl: wikidata.search, active: true },
@@ -40,6 +48,14 @@ export const SOURCES = {
   stolpersteine: { label: 'Stolpersteine (NS-Opfer)',    impl: stolpersteine.search, active: true, note: 'nur bei NS-Kontext' },
   wikipedia_en:  { label: 'Wikipedia (EN)',              impl: wikipedia_en.search, active: true },
   archive_org:   { label: 'Internet Archive',            impl: archive_org.search, active: true },
+  duckduckgo:    { label: 'Web (DuckDuckGo)',            impl: duckduckgo.search, active: true },
+  linkedin:      { label: 'LinkedIn (öffentlich)',       impl: linkedin.search, active: true, note: 'nur Lebende / nach 1990' },
+  xing:          { label: 'Xing (öffentlich)',           impl: xing.search, active: true, note: 'nur Lebende / nach 1990' },
+  press:         { label: 'Presse (Portal + OpenPR)',    impl: press.search, active: true },
+  reddit:        { label: 'Reddit',                      impl: reddit.search, active: true },
+  github:        { label: 'GitHub',                      impl: github.search, active: true, note: 'nur Lebende / nach 1990' },
+  googlebooks:   { label: 'Google Books',                impl: googlebooks.search, active: true },
+  mastodon:      { label: 'Mastodon',                    impl: mastodon.search, active: true, note: 'nur Lebende / nach 1990' },
 };
 
 const DEFAULT_SOURCE_KEYS = Object.keys(SOURCES);

@@ -26,6 +26,14 @@ async function processJob(job) {
     db.prepare(`UPDATE research_jobs SET status='failed', completed_at=? WHERE id=?`).run(nowIso(), job.id);
     return;
   }
+  // Attach contextual data that some sources (LinkedIn, Xing) use to boost
+  // confidence (employer / institution matches in snippets).
+  try {
+    person.jobs = db.prepare('SELECT title, employer, place FROM jobs WHERE person_id=?').all(job.person_id);
+  } catch { person.jobs = []; }
+  try {
+    person.education = db.prepare('SELECT institution, field, place FROM education WHERE person_id=?').all(job.person_id);
+  } catch { person.education = []; }
   const sourceKeys = JSON.parse(job.sources || '[]');
   const statuses = {};
   for (const k of sourceKeys) statuses[k] = { state: 'queued', count: 0 };
