@@ -431,6 +431,7 @@ function computeLayout() {
   const parentOf = new Map();   // child -> [parentId]
   const childOf = new Map();    // parent -> [childId]
   const spouseOf = new Map();   // id -> Set(spouseId)
+  const spouseEdges = new Map(); // "a|b"(sorted) -> edge object
   for (const p of state.persons) {
     parentOf.set(p.id, []);
     childOf.set(p.id, []);
@@ -443,17 +444,18 @@ function computeLayout() {
     } else if (e.type === 'spouse') {
       spouseOf.get(e.from_id)?.add(e.to_id);
       spouseOf.get(e.to_id)?.add(e.from_id);
+      const k = e.from_id < e.to_id ? `${e.from_id}|${e.to_id}` : `${e.to_id}|${e.from_id}`;
+      spouseEdges.set(k, e);
     }
   }
 
+  const personById = new Map(state.persons.map(p => [p.id, p]));
+
   // --- generation assignment (depth from oldest ancestor) --------------
   const gen = new Map();
-  // seed roots (persons without parents)
-  const seedQueue = [];
   for (const p of state.persons) {
-    if (!parentOf.get(p.id).length) { gen.set(p.id, 0); seedQueue.push(p.id); }
+    if (!parentOf.get(p.id).length) gen.set(p.id, 0);
   }
-  // propagate: child's gen = max(parent gens) + 1
   let changed = true, safety = 0;
   while (changed && safety++ < 100) {
     changed = false;
@@ -478,7 +480,6 @@ function computeLayout() {
       }
     }
   }
-  // anything still unassigned: parent-less, orphaned → generation 0
   for (const p of state.persons) if (!gen.has(p.id)) gen.set(p.id, 0);
 
   // --- family units ----------------------------------------------------
