@@ -815,12 +815,10 @@ app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
       if (!e || !e.type || !['parent','spouse'].includes(e.type)) { errors.push({ bucket: 'new_edges', idx, error: 'invalid type' }); continue; }
       const resolve = (field) => {
         const idVal = e[field];
-        if (idVal === null || idVal === undefined || idVal === '' || idVal === 'this') return personId;
-        if (idVal) {
-          const chk = db.prepare('SELECT id FROM persons WHERE id=?').get(idVal);
-          if (chk) return chk.id;
-        }
-        return null;
+        if (idVal === 'this') return personId;
+        if (!idVal) return null;
+        const chk = db.prepare('SELECT id FROM persons WHERE id=?').get(idVal);
+        return chk ? chk.id : null;
       };
       let fromId = resolve('from_person_id');
       let toId = resolve('to_person_id');
