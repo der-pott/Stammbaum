@@ -9,6 +9,7 @@ const api = {
   async remove(id) { return j(await fetch(`/api/persons/${id}`, { method: 'DELETE' })); },
   async tree() { return j(await fetch('/api/tree')); },
   async createEdge(data) { return j(await fetch('/api/edges', postJson(data))); },
+  async updateEdge(id, data) { return j(await fetch(`/api/edges/${id}`, patchJson(data))); },
   async removeEdge(id) { return j(await fetch(`/api/edges/${id}`, { method: 'DELETE' })); },
   async research(person_id) { return j(await fetch('/api/ai/research', postJson({ person_id }))); },
   async latestResearch(person_id) {
@@ -1174,7 +1175,7 @@ function renderDetail() {
     h('h3', {}, 'Familie'),
     h('div', { class: 'family-grid' },
       familyGroup('Eltern', parents),
-      familyGroup('Ehepartner', spouses.map(s => s.p)),
+      familyGroup('Ehepartner', spouses.map(s => s.p), { kind: 'spouse', personId: p.id }),
       familyGroup('Geschwister', siblings),
       familyGroup('Kinder', children),
     ),
@@ -1250,28 +1251,46 @@ function yearRange(p) {
   return '';
 }
 
-function familyGroup(title, people) {
+function familyGroup(title, people, opts = {}) {
   if (!people.length) return h('div');
-  return h('div', { class: 'family-col' },
+  const isSpouse = opts.kind === 'spouse';
+  const wrap = h('div', { class: 'family-col' },
     h('div', { class: 'family-title' }, title),
-    h('div', { class: 'family-cards' },
-      ...people.map(x => {
-        const card = h('button', { class: 'family-card', 'data-id': x.id },
-          h('div', { class: 'family-avatar' },
-            x.portrait_image_id
-              ? h('img', { src: '/api/images/' + x.portrait_image_id, alt: nameOf(x) })
-              : h('span', {}, initialsOf(x)),
-          ),
-          h('div', { class: 'family-meta' },
-            h('div', { class: 'family-name' }, primaryNameOf(x)),
-            h('div', { class: 'family-dates' }, fmtLifeShort(x) || '—'),
-          ),
-        );
-        card.onclick = () => select(x.id);
-        return card;
-      }),
-    ),
   );
+  const cards = h('div', { class: 'family-cards' });
+  for (const x of people) {
+    const card = h('button', { class: 'family-card', 'data-id': x.id },
+      h('div', { class: 'family-avatar' },
+        x.portrait_image_id
+          ? h('img', { src: '/api/images/' + x.portrait_image_id, alt: nameOf(x) })
+          : h('span', {}, initialsOf(x)),
+      ),
+      h('div', { class: 'family-meta' },
+        h('div', { class: 'family-name' }, primaryNameOf(x)),
+        h('div', { class: 'family-dates' }, fmtLifeShort(x) || '—'),
+        isSpouse ? (() => {
+          const edge = findSpouseEdge(opts.personId, x.id);
+          const status = edge?.status || 'married';
+          const label = { divorced: 'geschieden', widowed: 'verwitwet', engaged: 'verlobt', partner: 'Lebenspartner', married: null }[status];
+          return label ? h('div', { class: 'family-status status-' + status }, label) : null;
+        })() : null,
+      ),
+    );
+    card.onclick = () => select(x.id);
+    const row = h('div', { class: 'family-card-row' }, card);
+    if (isSpouse && state.role === 'editor') {
+      const edge = findSpouseEdge(opts.personId, x.id);
+      if (edge) {
+        const edit = h('button', { class: 'family-card-edit', title: 'Beziehung bearbeiten', 'aria-label': 'Beziehung bearbeiten' });
+        edit.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M4 20h4L20 8l-4-4L4 16v4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
+        edit.onclick = (ev) => { ev.stopPropagation(); openEdgeDialog(edge); };
+        row.appendChild(edit);
+      }
+    }
+    cards.appendChild(row);
+  }
+  wrap.appendChild(cards);
+  return wrap;
 }
 
 /* --- historical context --------------------------------------------- */
@@ -2017,20 +2036,71 @@ function openPersonDialog(p = null) {
   dlg.showModal();
 }
 
-function openEdgeDialog() {
+function openEdgeDialog(existing = null) {
   const dlg = document.getElementById('edge-dialog');
   const form = document.getElementById('edge-form');
+  const title = document.getElementById('edge-dialog-title');
+  const extra = document.getElementById('edge-spouse-extra');
+  const isEdit = !!existing;
+  title.textContent = isEdit ? 'Beziehung bearbeiten' : 'Beziehung anlegen';
   const opts = state.persons.map(p => `<option value="${p.id}">${escapeHtml(nameOf(p))}</option>`).join('');
   form.from_id.innerHTML = opts;
   form.to_id.innerHTML = opts;
-  if (state.selected) form.from_id.value = state.selected;
+  if (isEdit) {
+    form.type.value = existing.type;
+    form.type.disabled = true;
+    form.from_id.value = existing.from_id;
+    form.from_id.disabled = true;
+    form.to_id.value = existing.to_id;
+    form.to_id.disabled = true;
+    if (form.status) form.status.value = existing.status || 'married';
+    if (form.since)  form.since.value  = existing.since  || '';
+    if (form.until)  form.until.value  = existing.until  || '';
+  } else {
+    form.type.disabled = false;
+    form.from_id.disabled = false;
+    form.to_id.disabled = false;
+    if (state.selected) form.from_id.value = state.selected;
+    if (form.status) form.status.value = 'married';
+    if (form.since)  form.since.value  = '';
+    if (form.until)  form.until.value  = '';
+  }
+  function syncExtra() { extra.hidden = form.type.value !== 'spouse'; }
+  syncExtra();
+  form.type.onchange = syncExtra;
   form.onsubmit = async (ev) => {
     ev.preventDefault();
     const data = Object.fromEntries(new FormData(form));
-    try { await api.createEdge(data); dlg.close(); await reload(); }
-    catch (e) { alert('Fehler: ' + e.message); }
+    try {
+      if (isEdit) {
+        // Only mutate status/since/until on existing edges — endpoints restrict others.
+        const patch = {};
+        if (existing.type === 'spouse') {
+          patch.status = data.status || null;
+          patch.since = data.since || null;
+          patch.until = data.until || null;
+        } else {
+          patch.since = data.since || null;
+          patch.until = data.until || null;
+        }
+        await api.updateEdge(existing.id, patch);
+      } else {
+        // Strip undefined status for parent edges.
+        if (data.type !== 'spouse') { delete data.status; delete data.since; delete data.until; }
+        await api.createEdge(data);
+      }
+      dlg.close();
+      await reload();
+    } catch (e) { alert('Fehler: ' + e.message); }
   };
   dlg.showModal();
+}
+
+function findSpouseEdge(a, b) {
+  return state.edges.find(e =>
+    e.type === 'spouse' &&
+    ((e.from_id === a && e.to_id === b) || (e.from_id === b && e.to_id === a))
+  );
 }
 
 function openImportDialog() {
