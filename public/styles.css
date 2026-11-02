@@ -1186,8 +1186,19 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
   }
 }
 
-/* Detail close button: hidden on desktop, shown on mobile via media query below */
-.detail-close { display: none; }
+/* Detail close button — visible everywhere so dossier is dismissable */
+.detail-close {
+  display: inline-grid;
+  position: absolute;
+  top: var(--sp-3); right: var(--sp-3);
+  z-index: 3;
+  width: 32px; height: 32px;
+  background: var(--paper-sunk);
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--ink-soft);
+}
+.detail-close:hover { color: var(--err); border-color: var(--err); background: var(--accent-soft); }
 
 @media (max-width: 820px) {
   .detail-close {
