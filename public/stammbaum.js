@@ -1948,29 +1948,46 @@ function consensusFieldLabel(f) {
 function renderSourceGrid(parent, sources, hits, personId) {
   if (!sources.length) return;
   const counts = {};
-  for (const h of hits) counts[h.source] = (counts[h.source] || 0) + 1;
+  const needsConfigBySource = {};
+  for (const hit of hits) {
+    counts[hit.source] = (counts[hit.source] || 0) + 1;
+    if (hit.payload && hit.payload.needs_config) needsConfigBySource[hit.source] = hit.payload;
+  }
   const grid = h('div', { class: 'source-grid' });
   for (const s of sources) {
     const n = counts[s.key] || 0;
-    const state_ = n > 0 ? 'done' : (s.note ? 'noted' : 'idle');
+    const needsConfig = !!needsConfigBySource[s.key] || (s.note && /braucht\s+[A-Z_]+/.test(s.note));
+    let state_;
+    if (needsConfig) state_ = 'needs-config';
+    else if (n > 0) state_ = 'done';
+    else if (s.note) state_ = 'noted';
+    else state_ = 'idle';
+    const title = s.label + (s.note ? ` · ${s.note}` : '');
+    const dotContent = needsConfig ? '🔑' : '';
     const cell = h('button', {
       class: 'source-cell',
       'data-state': state_,
-      title: s.label + (s.note ? ` · ${s.note}` : ''),
+      title,
     },
-      h('div', { class: 'source-cell-dot' }),
+      h('div', { class: 'source-cell-dot' }, dotContent),
       h('div', { class: 'source-cell-label' }, s.key.toUpperCase()),
       h('div', { class: 'source-cell-count' }, n ? String(n) : '—'),
     );
-    if (state.role === 'editor') {
-      cell.onclick = async () => {
-        cell.setAttribute('data-state', 'running');
-        try {
-          await api.scrapeSource(personId, s.key);
-        } catch (e) { /* ignore */ }
-        await loadResearchHits(personId);
-      };
-    }
+    cell.onclick = async () => {
+      if (needsConfig) {
+        const payload = needsConfigBySource[s.key] || {};
+        const vars = payload.env_vars ? payload.env_vars.join(', ') : (payload.env_var || (s.note.match(/[A-Z_]+/)?.[0] || 'unbekannt'));
+        const docs = payload.docs_url || 'https://brave.com/search/api/';
+        alert(`${s.label} ist nicht konfiguriert.\n\nBenötigte Umgebungsvariable(n): ${vars}\n\nTrage die Variable in /srv/projects/stammbaum/.env ein und starte den API-Container neu:\n  docker compose restart api\n\nAnmeldung: ${docs}`);
+        return;
+      }
+      if (state.role !== 'editor') return;
+      cell.setAttribute('data-state', 'running');
+      try {
+        await api.scrapeSource(personId, s.key);
+      } catch (e) { /* ignore */ }
+      await loadResearchHits(personId);
+    };
     grid.appendChild(cell);
   }
   parent.appendChild(h('div', { class: 'source-grid-wrap' },
@@ -1999,6 +2016,16 @@ function renderHitsList(parent, hits, personId) {
 async function scrapeHits(personId) {
   const body = document.getElementById('ext-sources-body');
   if (!body) return;
+  // Pre-flight: warn if any source needs config (user may want to configure first).
+  try {
+    const sources = await api.researchSources();
+    const needConfig = sources.filter(s => s.note && /braucht\s+[A-Z_]+/.test(s.note));
+    if (needConfig.length) {
+      const labels = needConfig.map(s => s.label).join(', ');
+      const ok = confirm(`${needConfig.length} Quellen brauchen noch Konfiguration (${labels}). Diese liefern "Konfiguration fehlt"-Karten.\n\nTrotzdem jetzt alle anderen Quellen durchsuchen?`);
+      if (!ok) return;
+    }
+  } catch { /* ignore pre-flight errors */ }
   const progress = h('div', { class: 'scrape-progress' },
     h('div', { class: 'meta' }, 'Recherche läuft…'),
     h('div', { id: 'scrape-progress-grid', class: 'source-grid progress-grid' }),

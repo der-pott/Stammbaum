@@ -741,6 +741,20 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
 }
 .source-cell[data-state="failed"] .source-cell-dot { background: var(--err); }
 .source-cell[data-state="noted"] .source-cell-dot { background: var(--line-strong); }
+.source-cell[data-state="needs-config"] {
+  border-color: var(--gold);
+  background: color-mix(in oklch, var(--gold) 10%, var(--paper));
+}
+.source-cell[data-state="needs-config"] .source-cell-dot {
+  background: transparent;
+  color: var(--gold);
+  font-size: 11px;
+  width: auto; height: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.source-cell[data-state="needs-config"] .source-cell-label { color: var(--gold); }
 .source-cell-label { font-size: 10px; font-weight: 600; letter-spacing: 0.04em; color: var(--ink-soft); }
 .source-cell-count { font-size: 11px; color: var(--ink); font-variant-numeric: tabular-nums; min-width: 20px; text-align: right; }
 

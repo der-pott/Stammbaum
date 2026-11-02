@@ -1,12 +1,13 @@
-// Reddit public search — JSON endpoint, no auth.
+// Reddit public search — JSON endpoint, no auth. old.reddit.com is more
+// permissive against bot-UAs than www.reddit.com.
 import { httpGet, nameParts } from '../http.js';
 
-export const META = { label: 'Reddit', url: 'https://reddit.com' };
+export const META = { label: 'Reddit', url: 'https://old.reddit.com' };
 
 export async function search(person) {
   const { full } = nameParts(person);
   if (!full) return [];
-  const url = `https://www.reddit.com/search.json?q=${encodeURIComponent('"' + full + '"')}&limit=10&sort=relevance`;
+  const url = `https://old.reddit.com/search.json?q=${encodeURIComponent('"' + full + '"')}&limit=10&sort=relevance`;
   const r = await httpGet('reddit', url, { accept: 'json' });
   if (!r.ok) {
     return [{ source: 'reddit', title: 'Reddit', url, snippet: `Zugriff nicht möglich (${r.error})`, confidence: 0, payload: { error: r.error } }];
@@ -15,7 +16,7 @@ export async function search(person) {
   if (!children.length) {
     return [{ source: 'reddit', title: 'Reddit', url, snippet: 'Keine Reddit-Treffer.', confidence: 0, payload: { empty: true } }];
   }
-  const relevantSubs = /^(de|germany|austria|genealogy|ancestry)$/i;
+  const relevantSubs = /^(de|germany|austria|genealogy|ancestry|AskHistorians|dachschaden)$/i;
   return children.slice(0, 10).map(c => {
     const d = c.data || {};
     const sub = d.subreddit || '';

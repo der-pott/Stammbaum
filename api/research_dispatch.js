@@ -29,6 +29,13 @@ import * as reddit from './sources/reddit.js';
 import * as github from './sources/github.js';
 import * as googlebooks from './sources/googlebooks.js';
 import * as mastodon from './sources/mastodon.js';
+import * as googlecse from './sources/googlecse.js';
+import { activeBackend } from './search_backend.js';
+
+const WEB_SEARCH_AVAILABLE = !!activeBackend();
+if (!WEB_SEARCH_AVAILABLE) {
+  console.warn('[research] No web-search backend configured. Set BRAVE_SEARCH_API_KEY (or SERPER_API_KEY) in .env to enable duckduckgo/linkedin/xing/press sources.');
+}
 
 export const SOURCES = {
   wikidata:      { label: 'Wikidata / Wikipedia (DE)', impl: wikidata.search, active: true },
@@ -48,17 +55,20 @@ export const SOURCES = {
   stolpersteine: { label: 'Stolpersteine (NS-Opfer)',    impl: stolpersteine.search, active: true, note: 'nur bei NS-Kontext' },
   wikipedia_en:  { label: 'Wikipedia (EN)',              impl: wikipedia_en.search, active: true },
   archive_org:   { label: 'Internet Archive',            impl: archive_org.search, active: true },
-  duckduckgo:    { label: 'Web (DuckDuckGo)',            impl: duckduckgo.search, active: true },
-  linkedin:      { label: 'LinkedIn (öffentlich)',       impl: linkedin.search, active: true, note: 'nur Lebende / nach 1990' },
-  xing:          { label: 'Xing (öffentlich)',           impl: xing.search, active: true, note: 'nur Lebende / nach 1990' },
-  press:         { label: 'Presse (Portal + OpenPR)',    impl: press.search, active: true },
+  duckduckgo:    { label: 'Web (allgemein)',             impl: duckduckgo.search, active: true, note: WEB_SEARCH_AVAILABLE ? null : 'braucht BRAVE_SEARCH_API_KEY' },
+  linkedin:      { label: 'LinkedIn (öffentlich)',       impl: linkedin.search, active: true, note: WEB_SEARCH_AVAILABLE ? 'nur Lebende / nach 1990' : 'braucht BRAVE_SEARCH_API_KEY' },
+  xing:          { label: 'Xing (öffentlich)',           impl: xing.search, active: true, note: WEB_SEARCH_AVAILABLE ? 'nur Lebende / nach 1990' : 'braucht BRAVE_SEARCH_API_KEY' },
+  press:         { label: 'Presse (Portal + OpenPR)',    impl: press.search, active: true, note: WEB_SEARCH_AVAILABLE ? null : 'braucht BRAVE_SEARCH_API_KEY' },
+  googlecse:     { label: 'Google (via CSE)',            impl: googlecse.search, active: googlecse.isConfigured(), note: googlecse.isConfigured() ? null : 'braucht GOOGLE_CSE_API_KEY + GOOGLE_CSE_CX' },
   reddit:        { label: 'Reddit',                      impl: reddit.search, active: true },
   github:        { label: 'GitHub',                      impl: github.search, active: true, note: 'nur Lebende / nach 1990' },
   googlebooks:   { label: 'Google Books',                impl: googlebooks.search, active: true },
   mastodon:      { label: 'Mastodon',                    impl: mastodon.search, active: true, note: 'nur Lebende / nach 1990' },
 };
 
-const DEFAULT_SOURCE_KEYS = Object.keys(SOURCES);
+// Only active sources are fanned out by default; inactive ones are listed via
+// `listSources()` so the UI can show "needs config" cells.
+const DEFAULT_SOURCE_KEYS = Object.entries(SOURCES).filter(([, s]) => s.active).map(([k]) => k);
 const PER_SOURCE_TIMEOUT = 15_000;
 const CACHE_TTL_MS = 7 * 24 * 3600_000;
 
