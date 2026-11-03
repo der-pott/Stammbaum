@@ -1100,17 +1100,30 @@ function computeLayout() {
       if (!edge._implied) continue;
       addLink(rootOfNode.get(edge.from_id), rootOfNode.get(edge.to_id));
     }
-    // Iterative barycenter sort; birth year as tiebreak.
+    // Iterative barycenter sort based on estimated x-centers (not indices,
+    // because subtree widths vary dramatically — using indices gives wrong
+    // barycenters when a Big subtree sits next to a small one). Birth year
+    // as tiebreak.
     const byear = (r) => year(personById.get(r)?.birth_date) || '9999';
-    for (let iter = 0; iter < 8; iter++) {
-      const idx = new Map(rootAnchors.map((r, i) => [r, i]));
+    const estimateCenters = (order) => {
+      const xs = new Map();
+      let cx = 0;
+      for (const r of order) {
+        const w = subtreeWidth.get(r) || widthOf(r);
+        xs.set(r, cx + w / 2);
+        cx += w + 56;  // approx FAMILY_GAP
+      }
+      return xs;
+    };
+    for (let iter = 0; iter < 10; iter++) {
+      const xs = estimateCenters(rootAnchors);
       const bary = new Map();
       for (const r of rootAnchors) {
         const linked = rootLinks.get(r);
-        if (!linked.size) { bary.set(r, idx.get(r)); continue; }
+        if (!linked.size) { bary.set(r, xs.get(r)); continue; }
         let sum = 0, wsum = 0;
         for (const [other, w] of linked) {
-          sum += idx.get(other) * w;
+          sum += xs.get(other) * w;
           wsum += w;
         }
         bary.set(r, sum / wsum);
@@ -1128,6 +1141,8 @@ function computeLayout() {
       rootAnchors.length = 0;
       rootAnchors.push(...newOrder);
     }
+    // Expose for debugging / live inspection.
+    try { window.__treeRootOrder = rootAnchors.map(r => personById.get(r)?.given_name + ' ' + personById.get(r)?.surname); } catch(e){}
   }
 
   // --- place slots top-down -------------------------------------------
