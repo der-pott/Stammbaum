@@ -37,15 +37,17 @@ function roleKeywords(title) {
   return kw;
 }
 
-// Deutsche Universitätsstädte, grob nach Prominenz medizinischer Fakultäten
-// sortiert. Für datenarme Prof. Dr. med.-Personen enumerieren wir diese
-// Städte um Firecrawl die nötige geographische Spezifität zu liefern.
+// Deutsche Universitätsstädte, bewusst mit kleineren/spezialisierten Fakultäten
+// VORNE: Firecrawl findet Berliner/Münchner Michaels bereits über den nackten
+// Namens-Index, aber nicht die aus Rostock/Greifswald/Lübeck. Priorisierung
+// nach "Index-Lücken-Wahrscheinlichkeit", nicht nach Stadtgröße.
 const UNI_CITIES = [
-  'Berlin', 'München', 'Hamburg', 'Köln', 'Frankfurt', 'Freiburg', 'Heidelberg',
-  'Tübingen', 'Göttingen', 'Hannover', 'Mainz', 'Düsseldorf', 'Bonn', 'Münster',
-  'Leipzig', 'Dresden', 'Jena', 'Halle', 'Rostock', 'Greifswald', 'Kiel',
-  'Lübeck', 'Erlangen', 'Würzburg', 'Marburg', 'Regensburg', 'Ulm',
-  'Essen', 'Bochum', 'Magdeburg',
+  'Rostock', 'Greifswald', 'Lübeck', 'Kiel', 'Jena', 'Marburg',
+  'Göttingen', 'Tübingen', 'Freiburg', 'Heidelberg', 'Erlangen',
+  'Würzburg', 'Mainz', 'Münster', 'Düsseldorf', 'Bonn', 'Halle',
+  'Magdeburg', 'Regensburg', 'Ulm', 'Essen', 'Bochum',
+  'Hannover', 'Leipzig', 'Dresden', 'Frankfurt', 'Köln',
+  'Hamburg', 'München', 'Berlin',
 ];
 
 // Medizinische Fachrichtungen für Prof-Dr-med-Enumeration (zweite Dimension).
@@ -216,8 +218,10 @@ export async function search(person) {
     // Early-Stop-Signale: Trefferhost matcht Fach-/Uni-/Klinik-Pattern
     const QUALITY_HOST = /(uni-[a-z]+\.de|cpr\.|klinik(um)?|charite|aerzte|facharzt|professoren)/i;
     let qualityHits = 0;
-    const QUALITY_TARGET = 3;    // Early-Stop sobald 3 Fach-Hosts gefunden
-    const MAX_FALLBACK_QUERIES = 25; // Budget-Cap: 25 * 1500ms = 37s
+    const QUALITY_TARGET = 2;    // Early-Stop sobald 2 Fach-Hosts gefunden
+    // Cloudflare-Free HTTP-Timeout = 100s. Budget: 12 Queries * 1500ms = 18s
+    // + Top-5 Scrape je 10s = max 68s. Fits comfortably.
+    const MAX_FALLBACK_QUERIES = 12;
     let used = 0;
     for (const q of fallback) {
       if (used >= MAX_FALLBACK_QUERIES) break;
