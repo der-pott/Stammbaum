@@ -1141,8 +1141,47 @@ function computeLayout() {
       rootAnchors.length = 0;
       rootAnchors.push(...newOrder);
     }
+    // Greedy adjacent-swap pass: minimize sum of cross-tree edge lengths.
+    // Barycenter on a self-referential single layer can oscillate; a local
+    // greedy swap on the barycenter result converges to a local minimum.
+    const totalCrossLength = (order) => {
+      const xs = estimateCenters(order);
+      let total = 0;
+      for (const r of order) {
+        const linked = rootLinks.get(r) || new Map();
+        for (const [other, w] of linked) {
+          const xa = xs.get(r), xb = xs.get(other);
+          if (xa == null || xb == null) continue;
+          total += Math.abs(xa - xb) * w;
+        }
+      }
+      return total / 2;
+    };
+    let bestLen = totalCrossLength(rootAnchors);
+    let improved = true, swapCount = 0;
+    while (improved && swapCount < 200) {
+      improved = false;
+      for (let i = 0; i < rootAnchors.length - 1; i++) {
+        const tmp = rootAnchors[i];
+        rootAnchors[i] = rootAnchors[i + 1];
+        rootAnchors[i + 1] = tmp;
+        const newLen = totalCrossLength(rootAnchors);
+        if (newLen + 0.5 < bestLen) {
+          bestLen = newLen;
+          improved = true;
+          swapCount++;
+        } else {
+          rootAnchors[i + 1] = rootAnchors[i];
+          rootAnchors[i] = tmp;
+        }
+      }
+    }
     // Expose for debugging / live inspection.
-    try { window.__treeRootOrder = rootAnchors.map(r => personById.get(r)?.given_name + ' ' + personById.get(r)?.surname); } catch(e){}
+    try {
+      window.__treeRootOrder = rootAnchors.map(r => personById.get(r)?.given_name + ' ' + personById.get(r)?.surname);
+      window.__treeRootSwaps = swapCount;
+      window.__treeCrossLen = bestLen;
+    } catch(e){}
   }
 
   // --- place slots top-down -------------------------------------------
