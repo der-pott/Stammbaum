@@ -133,7 +133,7 @@ function buildUserPrompt(ctx, register, alreadyProcessed = []) {
 // Bump bei Prompt-Änderungen die eine Re-Analyse rechtfertigen.
 // v2: verified_facts werden jetzt als Extraktionsquelle statt reiner Anker
 //     behandelt (sonst fehlten Eltern-Vorschläge nachdem Hit bestätigt wurde).
-const PROMPT_VERSION = 'v3';
+const PROMPT_VERSION = 'v4';
 
 export function hashContext(ctx) {
   const canonical = JSON.stringify({

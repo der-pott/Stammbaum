@@ -865,8 +865,10 @@ function gatherBioContext(personId) {
   `).all(personId);
   const verifiedFacts = verifiedRows.map(r => {
     let p = null; try { p = JSON.parse(r.payload || 'null'); } catch { /* ignore */ }
+    // 15 KB pro bestätigter Quelle — Claude Opus-Context ist riesig, 4 KB
+    // hat die Familienstruktur bei CPR-Michael (bei Pos 4014) abgeschnitten.
     return { source: r.source, url: r.url, title: r.title, snippet: r.snippet,
-      markdown: p?.markdown ? p.markdown.slice(0, 4000) : null };
+      markdown: p?.markdown ? p.markdown.slice(0, 15000) : null };
   });
 
   // Web-Dossier-Volltexte (nur solche mit markdown im payload) + sonstige Snippets
@@ -1464,7 +1466,7 @@ app.post('/api/persons/:id/research/scrape-source/:key', requireEditor, aiLimite
     person.verified_facts = vrows.map(r => {
       let p = null; try { p = JSON.parse(r.payload || 'null'); } catch { /* ignore */ }
       return { source: r.source, url: r.url, title: r.title, snippet: r.snippet,
-        markdown: p?.markdown ? p.markdown.slice(0, 2000) : null };
+        markdown: p?.markdown ? p.markdown.slice(0, 10000) : null };
     });
   } catch { person.verified_facts = []; }
   // Abgelehnte URLs: sources sollen sie nicht erneut scrapen und ins Dossier

@@ -66,7 +66,7 @@ async function processJob(job) {
     person.verified_facts = vrows.map(r => {
       let p = null; try { p = JSON.parse(r.payload || 'null'); } catch { /* ignore */ }
       return { source: r.source, url: r.url, title: r.title, snippet: r.snippet,
-        markdown: p?.markdown ? p.markdown.slice(0, 2000) : null };
+        markdown: p?.markdown ? p.markdown.slice(0, 10000) : null };
     });
   } catch { person.verified_facts = []; }
   const sourceKeys = JSON.parse(job.sources || '[]');
