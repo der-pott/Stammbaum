@@ -1582,10 +1582,6 @@ function tagSides(persons, edges, egoId, leftParentId, rightParentId) {
       spouseOf.get(e.to_id)?.add(e.from_id);
     }
   }
-  // Pre-tag both primary parents so neither BFS can retag the other.
-  if (leftParentId)  sideById.set(leftParentId,  'left');
-  if (rightParentId) sideById.set(rightParentId, 'right');
-
   // Center: ego + descendants + ego spouses
   sideById.set(egoId, 'center');
   const descQ = [...(childOf.get(egoId) || [])];
@@ -1814,8 +1810,23 @@ function computeLayout() {
   const mergedUpstreamParentEdgeKeys = mergeSets(leftLayout?.upstreamParentEdgeKeys, centerLayout.upstreamParentEdgeKeys, rightLayout?.upstreamParentEdgeKeys);
   const mergedWantedUpstreamSpouseKeys = mergeSets(leftLayout?.wantedUpstreamSpouseKeys, centerLayout.wantedUpstreamSpouseKeys, rightLayout?.wantedUpstreamSpouseKeys);
 
-  const totalW = (mergedNodes.length ? Math.max(...mergedNodes.map(n => n.x + n.w)) : globalMarginL) + 80;
-  const totalH = (mergedNodes.length ? Math.max(...mergedNodes.map(n => n.y + n.h)) : marginT_val)   + 60;
+  // Hard-center ego: shift all nodes right so ego.cx = rawTotalW / 2.
+  const egoMergedNode = mergedNodes.find(n => n.id === egoId);
+  if (egoMergedNode) {
+    const rawTotalW = (mergedNodes.length ? Math.max(...mergedNodes.map(n => n.x + n.w)) : globalMarginL) + 80;
+    const egoCx     = egoMergedNode.x + egoMergedNode.w / 2;
+    const targetCx  = rawTotalW / 2;
+    const delta     = targetCx - egoCx;
+    if (delta > 0) {
+      for (const n of mergedNodes) { n.x += delta; n.cx += delta; }
+      for (const [, pos] of posById) { pos.x += delta; pos.cx += delta; }
+    }
+  }
+
+  const rawTotalW2 = (mergedNodes.length ? Math.max(...mergedNodes.map(n => n.x + n.w)) : globalMarginL) + 80;
+  const egoFinalCx = egoMergedNode ? egoMergedNode.x + egoMergedNode.w / 2 : rawTotalW2 / 2;
+  const totalW = Math.max(rawTotalW2, 2 * egoFinalCx);
+  const totalH = (mergedNodes.length ? Math.max(...mergedNodes.map(n => n.y + n.h)) : marginT_val) + 60;
 
   const overlaps = scanOverlaps(mergedNodes);
 
@@ -1904,7 +1915,9 @@ function renderTree() {
 
   const canvas = document.getElementById('tree-canvas');
   const cw = canvas.clientWidth, ch = canvas.clientHeight;
-  svg.setAttribute('viewBox', `0 0 ${cw} ${ch}`);
+  const viewW = cw > 0 ? cw : (state.layout?.totalW || 1000);
+  const viewH = ch > 0 ? ch : (state.layout?.totalH || 800);
+  svg.setAttribute('viewBox', `0 0 ${viewW} ${viewH}`);
   svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
 
   // clipPaths for round portraits — coordinates are in each node-group's LOCAL
