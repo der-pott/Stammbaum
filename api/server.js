@@ -1127,6 +1127,26 @@ app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
       };
       if (!fromId) fromId = applyHint(e.from_hint);
       if (!toId) toId = applyHint(e.to_hint);
+      // Fallback: wenn Claude 'null' setzt und keinen Hint liefert, nimmt er damit implizit
+      // "diese Person" (Subject des Reviews). Fülle fehlende Seite mit personId auf.
+      // Für parent-edges: wenn die aufgefüllte Seite inhaltlich auf der falschen Seite steht
+      // (z.B. Mutter als to_hint, Subject als null-from), tausche die Richtung so dass
+      // from=Elternteil und to=Kind. Heuristik: wenn eine Seite via Hint neu/existierend
+      // und die andere personId ist, und type=parent, prüfe Hint auf typische Eltern-Hinweise.
+      const fromWasNull = !e.from_person_id && !e.from_hint;
+      const toWasNull = !e.to_person_id && !e.to_hint;
+      if (!fromId && fromWasNull) fromId = personId;
+      if (!toId && toWasNull) toId = personId;
+      if (e.type === 'parent' && fromWasNull && toId && toId !== personId) {
+        // Claude meinte: "diese Person hat Elternteil X". Richtige Richtung: from=X, to=diese.
+        fromId = toId;
+        toId = personId;
+      }
+      if (e.type === 'parent' && toWasNull && fromId && fromId === personId && e.from_hint) {
+        // Analog umgekehrt: from=diese Person, to_hint war Elternteil-Name — swap
+        toId = fromId;
+        fromId = applyHint(e.from_hint) || personId;
+      }
       if (!fromId || !toId) {
         errors.push({ bucket: 'new_edges', idx, error: 'from/to id not resolvable' });
         recordItem('new_edges', idx, e, 'failed');

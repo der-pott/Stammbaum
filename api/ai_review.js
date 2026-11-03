@@ -22,6 +22,11 @@ Finde:
 
    NIE nur eine Edge wenn beide Elternteile bekannt oder aus dem Kontext erschließbar sind. Shared Children sind für die Baum-Darstellung essentiell (Marital-Anchor-Regel braucht shared child von beiden Partnern, sonst keine Couple-Unit).
 
+   RICHTUNGSKONVENTION parent-edge (ZWINGEND): from = Elternteil, to = Kind. IMMER.
+   Beispiel: "Michael hat Mutter Irene" → {from_hint:{given_name:"Irene",surname:"Radke"}, to_person_id:"this", type:"parent"}
+   NIEMALS andersrum: {from_person_id:"this", to_hint:{Irene}} wäre "Michael ist Elternteil von Irene" — falsch.
+   Für die analysierte Person (Subject des Reviews): ZWINGEND "this" als Wert verwenden, kein null, kein leeres Hint-Objekt.
+
    Analog für neu angelegte Partner: wenn new_person-Vorschlag „Giesela (Ehefrau von Erich)" ein Kind X mitbringt, zusätzlich zu Erichs parent-edge auch für Giesela einen parent-edge via from_hint vorschlagen.
 3. RESIDENCE-ERGÄNZUNGEN. Beispiel: "lange in Lütjenburg gelebt" → neuer residences-Eintrag Lütjenburg (schl.-holst. PLZ 24321).
 4. STRUKTUR-ERGÄNZUNGEN bestehender Einträge. Beispiel: residence hat place="Lütjenburg" aber keine PLZ/Stadt/Region → suggest residence_update mit postal_code=24321, city=Lütjenburg, region=Schleswig-Holstein.
@@ -41,7 +46,7 @@ Schema:
     {"given_name":"...","surname":"...","birth_name":null,"gender":"m|f|null","birth_date":null,"birth_place":null,"death_date":null,"death_place":null,"notes":null,"source_hint":"..."}
   ],
   "new_edges": [
-    {"from_person_id":"<id-aus-register-oder-null-falls-this-person>","to_person_id":"<id-aus-register>","type":"parent|spouse","status":"married|divorced|widowed|engaged|partner|null","source_hint":"..."},
+    {"from_person_id":"<id-aus-register-oder-'this'-falls-diese-person>","to_person_id":"<id-aus-register>","type":"parent|spouse","status":"married|divorced|widowed|engaged|partner|null","source_hint":"..."},
     {"from_person_id":"<id-aus-register>","to_hint":{"given_name":"Giesela","surname":"Sehnke"},"type":"spouse","status":"married","source_hint":"..."}
   ],
   "new_residences": [
@@ -133,7 +138,7 @@ function buildUserPrompt(ctx, register, alreadyProcessed = []) {
 // Bump bei Prompt-Änderungen die eine Re-Analyse rechtfertigen.
 // v2: verified_facts werden jetzt als Extraktionsquelle statt reiner Anker
 //     behandelt (sonst fehlten Eltern-Vorschläge nachdem Hit bestätigt wurde).
-const PROMPT_VERSION = 'v4';
+const PROMPT_VERSION = 'v5';
 
 export function hashContext(ctx) {
   const canonical = JSON.stringify({
