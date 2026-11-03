@@ -13,11 +13,19 @@ const DDG_IMG_URL  = (q) => `https://duckduckgo.com/?q=${encodeURIComponent(q)}&
 
 const SKIP_URL = [
   /\/favicon|\/logo|\/icon|\/sprite|\/banner|\/cookie|\/consent|\/bg(_|-)/i,
-  /tracking|analytics|pixel|placeholder|avatar.jpg/i,
+  /tracking|analytics|pixel|placeholder|avatar\.jpg/i,
   /\.svg(\?|$)/i,
   /data:image/i,
   /gravatar\.com/i,
+  /\/themes?\//i,          // CMS theme assets
+  /\/skins?\//i,
+  /\/assets\/(?:ui|common)/i,
+  /image_terms|link_extern|image_terms_of_use/i,
+  /\.(gif|webp)\?.*ad/i,   // ad banners
 ];
+
+// Positive signals for a real portrait / person photo
+const PORTRAIT_HINT = /pic|photo|foto|portrait|headshot|profile|mitarbeiter|person|team|member|profil|portr|kolleg/i;
 
 function buildQueries(person) {
   const { full, firstGiven, surname } = nameParts(person);
@@ -83,20 +91,51 @@ function extractBingImages(html, query) {
   return out;
 }
 
-// og:image / twitter:image aus einer Textseite ziehen.
-function extractOgImage(html, pageUrl) {
-  if (!html) return [];
+// Alle Bild-Kandidaten einer Textseite ziehen: og:image + <img> src + markdown.
+// Filter: SKIP_URL für Logos/Themes/Icons. Portrait-Hints boosten später das
+// Scoring. So findet web_images z.B. das Portrait im CPR-Rostock-HTML das
+// kein og:image deklariert.
+function extractImagesFromPage(html, md, pageUrl) {
   const metas = [];
-  const ogRe = /<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image|og:image:url)["'][^>]+content=["']([^"']+)["']/gi;
   const seen = new Set();
-  let m;
-  while ((m = ogRe.exec(html)) !== null) {
+  const push = (rawUrl, src) => {
+    if (!rawUrl) return;
     let abs;
-    try { abs = new URL(m[1], pageUrl).href; } catch { continue; }
-    if (SKIP_URL.some(p => p.test(abs))) continue;
-    if (seen.has(abs)) continue;
+    try { abs = new URL(rawUrl.split(/\s+/)[0], pageUrl).href; } catch { return; }
+    if (SKIP_URL.some(p => p.test(abs))) return;
+    if (!/^https?:/i.test(abs)) return;
+    if (seen.has(abs)) return;
     seen.add(abs);
-    metas.push({ image_url: abs, page_url: pageUrl, alt: '', width: null, height: null, source_query: 'og:image' });
+    metas.push({ image_url: abs, page_url: pageUrl, alt: '', width: null, height: null, source_query: src });
+  };
+  // 1. og:image / twitter:image (höchste Priorität — vom Seitenbesitzer kuratiert)
+  if (html) {
+    const ogRe = /<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image|og:image:url)["'][^>]+content=["']([^"']+)["']/gi;
+    let m; while ((m = ogRe.exec(html)) !== null) push(m[1], 'og:image');
+  }
+  // 2. HTML <img src>
+  if (html) {
+    const imgRe = /<img[^>]+src=["']([^"']+)["'][^>]*(?:alt=["']([^"']*)["'])?/gi;
+    let m;
+    while ((m = imgRe.exec(html)) !== null) {
+      const url = m[1];
+      const alt = m[2] || '';
+      push(url, '<img>');
+      // alt updaten für den gerade gepushten Eintrag
+      const entry = metas[metas.length - 1];
+      if (entry && alt) entry.alt = alt;
+    }
+  }
+  // 3. Markdown ![alt](url)
+  if (md) {
+    const mdRe = /!\[([^\]]*)\]\(([^)\s]+)/g;
+    let m;
+    while ((m = mdRe.exec(md)) !== null) {
+      const alt = m[1] || '';
+      push(m[2], 'markdown-image');
+      const entry = metas[metas.length - 1];
+      if (entry && alt) entry.alt = alt;
+    }
   }
   return metas;
 }
@@ -112,12 +151,13 @@ async function scrapeImageSearch(url, query) {
   } catch { return []; }
 }
 
-async function scrapeTextPageForOg(url) {
+async function scrapeTextPageForImages(url) {
   try {
     const r = await fetchPage('web_images', url, { timeout: 15_000 });
     if (!r.ok) return [];
     const html = r.html || r.text || '';
-    return extractOgImage(html, url);
+    const md = r.markdown || '';
+    return extractImagesFromPage(html, md, url);
   } catch { return []; }
 }
 
@@ -145,29 +185,37 @@ export async function search(person) {
     bingResults.push(...hits);
   }
 
-  // Phase 2: Zusätzlich 3 Top-Textsuche-Treffer scrapen + og:image extrahieren
-  // (Nachrufe, Vereins-Seiten etc. haben oft Portrait im og:image).
+  // Phase 2: User-bestätigte Treffer (verified_facts) IMMER gezielt nach
+  // Bildern scrapen. Hier liegt der Portrait-Hit oft begraben (CPR, Vita-
+  // Seiten etc). Anschließend Top-Textsuche-Treffer der aktuellen Queries.
+  const verifiedUrls = (person.verified_facts || []).map(v => v.url).filter(Boolean);
   const textSearchResults = [];
   for (const q of queries.slice(0, 3)) {
     const r = await webSearch({ query: q, country: 'DE', limit: 4 });
     if (r.ok) for (const h of (r.hits || [])) if (h.url) textSearchResults.push(h.url);
   }
-  const topTextUrls = Array.from(new Set(textSearchResults)).slice(0, 6);
-  const ogResults = [];
-  for (const u of topTextUrls) {
-    const og = await scrapeTextPageForOg(u);
-    ogResults.push(...og);
+  // verified_urls VOR den search-results — höchste Priorität
+  const allPageUrls = Array.from(new Set([...verifiedUrls, ...textSearchResults])).slice(0, 10);
+  const pageImgResults = [];
+  for (const u of allPageUrls) {
+    const imgs = await scrapeTextPageForImages(u);
+    pageImgResults.push(...imgs);
   }
 
   // Dedupe + score
   const byUrl = new Map();
-  for (const img of [...bingResults, ...ogResults]) {
+  for (const img of [...bingResults, ...pageImgResults]) {
     if (!img.image_url) continue;
     const prev = byUrl.get(img.image_url) || { ...img, matches: 0, queries: [], sources: new Set() };
     prev.matches += 1;
     if (img.source_query && !prev.queries.includes(img.source_query)) prev.queries.push(img.source_query);
-    prev.sources.add(img.source_query === 'og:image' ? 'og' : 'bing');
+    // Herkunft erfassen für Scoring
+    if (img.source_query === 'og:image') prev.sources.add('og');
+    else if (img.source_query === '<img>' || img.source_query === 'markdown-image') prev.sources.add('page');
+    else prev.sources.add('bing');
     if ((img.alt || '').length > (prev.alt || '').length) prev.alt = img.alt;
+    // Portrait-Hint im Pfadnamen → high confidence
+    if (PORTRAIT_HINT.test(img.image_url)) prev.portrait_hint = true;
     byUrl.set(img.image_url, prev);
   }
 
@@ -177,18 +225,36 @@ export async function search(person) {
   const birthPlaceLower = (person.birth_place || '').toLowerCase();
   const residences = (person.residences || []).map(r => (r.city || r.place || '').toLowerCase().split(',')[0].trim()).filter(Boolean);
 
+  // Verified-Page-Hosts erfassen — Bilder VON diesen URLs sind besonders
+  // wertvoll weil die Seite als Ground-Truth-Quelle bestätigt ist.
+  const verifiedHosts = new Set((person.verified_facts || [])
+    .map(v => { try { return new URL(v.url).host; } catch { return null; } })
+    .filter(Boolean));
+
   const items = Array.from(byUrl.values()).map(it => {
     const alt = (it.alt || '').toLowerCase();
-    let score = 0.35; // Bing/DDG images sind bereits name-targeted; höhere Baseline als bisher
+    const hasPageSrc = it.sources.has('page');
+    const hasOg = it.sources.has('og');
+    const hasBing = it.sources.has('bing');
+    let score = hasBing ? 0.35 : 0.3; // bing baseline etwas höher (bereits name-targeted)
     if (alt.includes(nameLower)) score += 0.35;
     else if (surnameLower && alt.includes(surnameLower)) score += 0.15;
     if (it.matches > 1) score += Math.min(0.2, (it.matches - 1) * 0.1);
-    if (it.sources.has('og')) score += 0.1; // og:image = Seitenbesitzer-ausgewählt = hochwertig
+    if (hasOg) score += 0.1;
+    if (hasPageSrc) score += 0.1;   // explizit auf einer Textseite verlinkt
+    if (it.portrait_hint) score += 0.2; // URL enthält "pic"/"foto"/"portrait"/etc
+    // Bild liegt auf einem user-bestätigten Host → +0.25 (CPR-Portrait-Fall)
+    try {
+      const imgHost = new URL(it.image_url).host;
+      if (verifiedHosts.has(imgHost)) { score += 0.25; it.verified_source = true; }
+    } catch { /* ignore */ }
     if (it.width && it.width >= 400) score += 0.05;
     if (it.width && it.width >= 800) score += 0.05;
     for (const r of residences) if (r.length > 2 && alt.includes(r)) { score += 0.05; break; }
     it.confidence = Math.min(1, score);
-    delete it.sources; // Set serialisiert schlecht
+    // Set serialisiert schlecht → als Array ablegen für payload
+    it.source_tags = Array.from(it.sources);
+    delete it.sources;
     return it;
   }).filter(it => !it.width || !it.height || (it.width >= 100 && it.height >= 100))
     .sort((a, b) => b.confidence - a.confidence)
@@ -205,21 +271,29 @@ export async function search(person) {
     }];
   }
 
-  return items.map(it => ({
-    source: 'web_images',
-    title: (it.alt || 'Bild').slice(0, 140),
-    url: it.page_url || it.image_url,
-    snippet: `Gefunden via ${it.sources?.has?.('og') ? 'og:image' : 'Bing-Images'}${it.width && it.height ? ` · ${it.width}×${it.height}` : ''}${it.matches > 1 ? ` · ${it.matches}× bestätigt` : ''}`,
-    confidence: it.confidence,
-    payload: {
-      is_image: true,
-      image_url: it.image_url,
-      thumb_url: it.thumb_url || it.image_url,
-      page_url: it.page_url,
-      alt: it.alt,
-      width: it.width,
-      height: it.height,
-      query_matches: it.matches,
-    },
-  }));
+  return items.map(it => {
+    const srcLabel = it.verified_source ? 'bestätigte Quelle'
+      : it.source_tags.includes('og') ? 'og:image'
+      : it.source_tags.includes('page') ? 'Textseiten-Bild'
+      : 'Bing-Images';
+    return {
+      source: 'web_images',
+      title: (it.alt || 'Bild').slice(0, 140),
+      url: it.page_url || it.image_url,
+      snippet: `Gefunden via ${srcLabel}${it.width && it.height ? ` · ${it.width}×${it.height}` : ''}${it.matches > 1 ? ` · ${it.matches}× bestätigt` : ''}${it.portrait_hint ? ' · Portrait-Hint' : ''}`,
+      confidence: it.confidence,
+      payload: {
+        is_image: true,
+        image_url: it.image_url,
+        thumb_url: it.thumb_url || it.image_url,
+        page_url: it.page_url,
+        alt: it.alt,
+        width: it.width,
+        height: it.height,
+        query_matches: it.matches,
+        verified_source: !!it.verified_source,
+        portrait_hint: !!it.portrait_hint,
+      },
+    };
+  });
 }
