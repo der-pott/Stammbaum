@@ -528,9 +528,6 @@ const FAMILY_GAP = 56;  // between adjacent sibling groups
 const ROW_H = 260;      // vertical gap between generations (room for 2–3 wrapped name lines)
 const NAME_WRAP_W = NODE_W + 24;   // max width per node name block
 const NAME_LINE_H = 15;             // px per wrapped name line (font-size 14 + leading)
-const EGO_PERSON_MATCHER = { given_name_includes: 'Maximilian', surname: 'Pott', birth_date: '1981-04-06' };
-const EGO_SIDE_GAP = FAMILY_GAP * 1.5;    // = 84
-const EGO_ORPHAN_GAP = FAMILY_GAP * 3;    // = 168
 
 // Text-metrics cache for SVG wrap.
 // Font MUST match CSS .node-name (Fraunces 14/500) — Canvas misst sonst zu schmal.
@@ -618,51 +615,7 @@ function labelWidthOf(person) {
 //
 // A regression test in `scripts/test_layout_overlaps.js` loads the live tree
 // and asserts invariant 1 holds for the real data.
-
-// Overlap detection constants — shared by legacyComputeLayout (resolver + guard)
-// and the ego-centred computeLayout wrapper (post-merge guard).
-const LABEL_LINES_EST = 3;
-const LINE_H = 18;
-const MIN_GAP_X = 20;
-
-function nodesCollide(a, b) {
-  const aBottom = a.y + a.h + LABEL_LINES_EST * LINE_H;
-  const bBottom = b.y + b.h + LABEL_LINES_EST * LINE_H;
-  const aRight = a.x + a.w, bRight = b.x + b.w;
-  if (a.x >= bRight || b.x >= aRight) return false;
-  if (a.y >= bBottom || b.y >= aBottom) return false;
-  return true;
-}
-
-// Scan an array of layout nodes for pairwise overlaps. Returns the same
-// structure that the overlap guard inside legacyComputeLayout used to build.
-function scanOverlaps(nodes) {
-  const overlaps = [];
-  for (let i = 0; i < nodes.length; i++) {
-    for (let j = i + 1; j < nodes.length; j++) {
-      if (nodesCollide(nodes[i], nodes[j])) {
-        overlaps.push({ a: nodes[i].id, b: nodes[j].id, aName: primaryNameOf(nodes[i].person), bName: primaryNameOf(nodes[j].person) });
-      }
-    }
-  }
-  if (overlaps.length) {
-    console.warn(`[layout] ${overlaps.length} residual overlap(s) after resolver:`, overlaps.slice(0, 10));
-  }
-  return overlaps;
-}
-
-function legacyComputeLayout(override = null) {
-  if (override) {
-    const saved = { persons: state.persons, edges: state.edges };
-    state.persons = override.persons ?? state.persons;
-    state.edges = override.edges ?? state.edges;
-    try {
-      return legacyComputeLayout(null);
-    } finally {
-      state.persons = saved.persons;
-      state.edges = saved.edges;
-    }
-  }
+function computeLayout() {
   if (!state.persons.length) return null;
 
   // Build directed relationship maps.
@@ -1427,6 +1380,11 @@ function legacyComputeLayout(override = null) {
   }
   const finalMaxY = Math.max(...nodes.map(n => n.y + n.h));
 
+  // Label-footprint constants — reused by resolver + guard.
+  const LABEL_LINES_EST = 3;
+  const LINE_H = 18;
+  const MIN_GAP_X = 20;
+
   // --- Overlap resolver -----------------------------------------------
   // Rules place subtrees cleanly most of the time, but corner cases
   // (cross-tree marital anchors, deep forced-satellite subtrees, dense
@@ -1436,7 +1394,14 @@ function legacyComputeLayout(override = null) {
   //   2. Cross-row: detect label-into-next-row collisions and nudge the
   //      lower-row node sideways out of the upper label's x-range.
   // We only move horizontally — vertical is semantic (generations).
-  // (nodesCollide / LABEL_LINES_EST / LINE_H / MIN_GAP_X are module-level.)
+  function nodesCollide(a, b) {
+    const aBottom = a.y + a.h + LABEL_LINES_EST * LINE_H;
+    const bBottom = b.y + b.h + LABEL_LINES_EST * LINE_H;
+    const aRight = a.x + a.w, bRight = b.x + b.w;
+    if (a.x >= bRight || b.x >= aRight) return false;
+    if (a.y >= bBottom || b.y >= aBottom) return false;
+    return true;
+  }
   const yTol = 20;
   function groupRows(ns) {
     const rows = new Map();
@@ -1516,7 +1481,17 @@ function legacyComputeLayout(override = null) {
   const totalH = finalMaxY + marginB;
 
   // --- Overlap guard (post-resolver sanity check) ---------------------
-  const overlaps = scanOverlaps(nodes);
+  const overlaps = [];
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      if (nodesCollide(nodes[i], nodes[j])) {
+        overlaps.push({ a: nodes[i].id, b: nodes[j].id, aName: primaryNameOf(nodes[i].person), bName: primaryNameOf(nodes[j].person) });
+      }
+    }
+  }
+  if (overlaps.length) {
+    console.warn(`[layout] ${overlaps.length} residual overlap(s) after resolver:`, overlaps.slice(0, 10));
+  }
 
   return {
     nodes, links, posById,
@@ -1527,309 +1502,6 @@ function legacyComputeLayout(override = null) {
     overlaps,
     totalW, totalH,
     marginL, marginT,
-  };
-}
-
-// --- Ego-centred layout helpers ----------------------------------------
-
-function resolveEgoId(persons) {
-  const matches = persons.filter(p =>
-    p.given_name && p.given_name.includes(EGO_PERSON_MATCHER.given_name_includes) &&
-    p.surname === EGO_PERSON_MATCHER.surname &&
-    (!EGO_PERSON_MATCHER.birth_date || p.birth_date === EGO_PERSON_MATCHER.birth_date)
-  );
-  if (!matches.length) return null;
-  if (matches.length > 1) console.warn('[ego-layout] multiple ego candidates, using lowest id');
-  return matches.reduce((a, b) => (String(a.id) < String(b.id) ? a : b)).id;
-}
-
-function parentsOfInEdges(id, edges) {
-  return edges.filter(e => e.type === 'parent' && e.to_id === id).map(e => e.from_id);
-}
-
-function pickPrimaryParents(egoId, parents, persons) {
-  if (parents.length === 1) return { leftParentId: parents[0], rightParentId: null };
-  const personById = new Map(persons.map(p => [p.id, p]));
-  const males = parents.filter(id => personById.get(id)?.gender === 'm');
-  if (males.length === 1) {
-    return { leftParentId: males[0], rightParentId: parents.find(id => id !== males[0]) };
-  }
-  const sorted = [...parents].sort((a, b) => {
-    const ba = personById.get(a)?.birth_date || '';
-    const bb = personById.get(b)?.birth_date || '';
-    if (ba && bb && ba !== bb) return ba.localeCompare(bb);
-    return String(a).localeCompare(String(b));
-  });
-  return { leftParentId: sorted[0], rightParentId: sorted[1] };
-}
-
-function tagSides(persons, edges, egoId, leftParentId, rightParentId) {
-  const sideById = new Map();
-  const childOf = new Map();
-  const parentOf = new Map();
-  const spouseOf = new Map();
-  for (const p of persons) {
-    childOf.set(p.id, []);
-    parentOf.set(p.id, []);
-    spouseOf.set(p.id, new Set());
-  }
-  for (const e of edges) {
-    if (e.type === 'parent') {
-      childOf.get(e.from_id)?.push(e.to_id);
-      parentOf.get(e.to_id)?.push(e.from_id);
-    } else if (e.type === 'spouse') {
-      spouseOf.get(e.from_id)?.add(e.to_id);
-      spouseOf.get(e.to_id)?.add(e.from_id);
-    }
-  }
-  // Pre-tag both primary parents so neither BFS can retag the other.
-  if (leftParentId)  sideById.set(leftParentId,  'left');
-  if (rightParentId) sideById.set(rightParentId, 'right');
-
-  // Center: ego + descendants + ego spouses
-  sideById.set(egoId, 'center');
-  const descQ = [...(childOf.get(egoId) || [])];
-  while (descQ.length) {
-    const id = descQ.shift();
-    if (sideById.has(id)) continue;
-    sideById.set(id, 'center');
-    for (const c of (childOf.get(id) || [])) descQ.push(c);
-  }
-  for (const spId of (spouseOf.get(egoId) || [])) {
-    if (!sideById.has(spId)) sideById.set(spId, 'center');
-  }
-  // Ego's full siblings share both parents — tag as 'center' so the BFS
-  // from left/right parents does not claim them for either side.
-  for (const pId of [leftParentId, rightParentId]) {
-    if (!pId) continue;
-    for (const sibId of (childOf.get(pId) || [])) {
-      if (sibId === egoId) continue;
-      if (!sideById.has(sibId)) sideById.set(sibId, 'center');
-    }
-  }
-  // BFS from a seed person, tagging with side; respects already-tagged nodes.
-  function bfsSide(seedId, side) {
-    if (!seedId) return;
-    const queue = [seedId];
-    while (queue.length) {
-      const id = queue.shift();
-      if (sideById.has(id)) continue;
-      sideById.set(id, side);
-      for (const par of (parentOf.get(id) || [])) {
-        if (!sideById.has(par)) queue.push(par);
-      }
-      for (const par of (parentOf.get(id) || [])) {
-        for (const sib of (childOf.get(par) || [])) {
-          // Skip ego and any node already tagged (including center-tagged siblings).
-          if (sib === egoId || sideById.has(sib)) continue;
-          queue.push(sib);
-        }
-      }
-      for (const ch of (childOf.get(id) || [])) {
-        if (sideById.get(ch) !== 'center' && !sideById.has(ch)) queue.push(ch);
-      }
-    }
-  }
-  bfsSide(leftParentId, 'left');
-  bfsSide(rightParentId, 'right');
-  // Married-ins: fixpoint — inherit side from any tagged spouse.
-  let changed = true;
-  let pass = 0;
-  while (changed && pass++ < persons.length) {
-    changed = false;
-    for (const p of persons) {
-      if (sideById.has(p.id)) continue;
-      for (const spId of (spouseOf.get(p.id) || [])) {
-        const s = sideById.get(spId);
-        if (s === 'left' || s === 'right' || s === 'center') {
-          sideById.set(p.id, s);
-          changed = true;
-          break;
-        }
-      }
-    }
-  }
-  for (const p of persons) {
-    if (!sideById.has(p.id)) sideById.set(p.id, 'none');
-  }
-  return sideById;
-}
-
-// New computeLayout: ego-centred three-column composition (left ancestors |
-// ego+descendants | right ancestors). Falls back to legacyComputeLayout when
-// no ego is found or ego has no parents.
-function computeLayout() {
-  if (!state.persons.length) return null;
-
-  const egoId = resolveEgoId(state.persons);
-  if (!egoId) {
-    console.warn('[ego-layout] ego not found — legacy root layout');
-    return legacyComputeLayout();
-  }
-
-  const parents = parentsOfInEdges(egoId, state.edges);
-  if (!parents.length) {
-    return legacyComputeLayout();
-  }
-
-  const { leftParentId, rightParentId } = pickPrimaryParents(egoId, parents, state.persons);
-  const sideById = tagSides(state.persons, state.edges, egoId, leftParentId, rightParentId);
-
-  function edgesFor(personIds) {
-    const idSet = new Set(personIds.map(p => p.id));
-    return state.edges.filter(e => idSet.has(e.from_id) && idSet.has(e.to_id));
-  }
-
-  const leftPersons   = state.persons.filter(p => sideById.get(p.id) === 'left');
-  const rightPersons  = rightParentId ? state.persons.filter(p => sideById.get(p.id) === 'right') : [];
-  const centerPersons = state.persons.filter(p => sideById.get(p.id) === 'center');
-  const orphanPersons = state.persons.filter(p => sideById.get(p.id) === 'none');
-
-  const centerLayout = legacyComputeLayout({ persons: centerPersons, edges: edgesFor(centerPersons) });
-  if (!centerLayout) return legacyComputeLayout();
-
-  const leftLayout  = leftPersons.length  ? legacyComputeLayout({ persons: leftPersons,  edges: edgesFor(leftPersons)  }) : null;
-  const rightLayout = rightPersons.length ? legacyComputeLayout({ persons: rightPersons, edges: edgesFor(rightPersons) }) : null;
-
-  // Renormalize each sub-layout to start at x=0, return content width.
-  function renormX(layout) {
-    if (!layout?.nodes.length) return 0;
-    const minX = Math.min(...layout.nodes.map(n => n.x));
-    if (minX !== 0) {
-      const dx = -minX;
-      for (const n of layout.nodes) { n.x += dx; n.cx += dx; }
-      for (const [, pos] of layout.slotPos) {
-        pos.anchorCx += dx;
-        for (const [k, v] of pos.satCx) pos.satCx.set(k, v + dx);
-        pos.slotLeftX += dx;
-      }
-    }
-    return Math.max(...layout.nodes.map(n => n.x + n.w));
-  }
-
-  const leftActualW   = renormX(leftLayout);
-  const centerActualW = renormX(centerLayout);
-  const rightActualW  = renormX(rightLayout);  // must be called before any shift
-
-  const centerShiftX = leftLayout  ? leftActualW   + EGO_SIDE_GAP : 0;
-  const rightShiftX  = rightLayout ? centerShiftX  + centerActualW + EGO_SIDE_GAP : 0;
-
-  // Vertical alignment: parent nodes should sit one ROW_H above ego.
-  const egoNodeCenter = centerLayout.posById.get(egoId);
-  const egoY_c = egoNodeCenter?.y ?? 80;
-
-  let leftShiftY = 0;
-  if (leftLayout && leftParentId) {
-    const lpNode = leftLayout.posById.get(leftParentId);
-    if (lpNode) leftShiftY = (egoY_c - ROW_H) - lpNode.y;
-  }
-  let rightShiftY = 0;
-  if (rightLayout && rightParentId) {
-    const rpNode = rightLayout.posById.get(rightParentId);
-    if (rpNode) rightShiftY = (egoY_c - ROW_H) - rpNode.y;
-  }
-
-  // Ensure no node ends up above the top margin after vertical shifts.
-  const marginT_val = 80;
-  let preMinY = Infinity;
-  for (const n of (leftLayout?.nodes || []))   preMinY = Math.min(preMinY, n.y + leftShiftY);
-  for (const n of centerLayout.nodes)           preMinY = Math.min(preMinY, n.y);
-  for (const n of (rightLayout?.nodes || []))   preMinY = Math.min(preMinY, n.y + rightShiftY);
-  const topNorm = preMinY < marginT_val ? (marginT_val - preMinY) : 0;
-
-  // Apply all shifts in-place (horizontal + vertical + top normalisation + global margin).
-  const globalMarginL = 80;
-  function shiftLayoutInPlace(layout, dx, dy) {
-    if (!layout) return;
-    for (const n of layout.nodes) { n.x += dx; n.cx += dx; n.y += dy; n.cy += dy; }
-    for (const [, pos] of layout.slotPos) {
-      pos.anchorCx += dx;
-      for (const [k, v] of pos.satCx) pos.satCx.set(k, v + dx);
-      pos.slotLeftX += dx;
-      pos.y += dy;
-    }
-  }
-  shiftLayoutInPlace(leftLayout,   globalMarginL,               leftShiftY  + topNorm);
-  shiftLayoutInPlace(centerLayout, globalMarginL + centerShiftX, topNorm);
-  shiftLayoutInPlace(rightLayout,  globalMarginL + rightShiftX,  rightShiftY + topNorm);
-
-  // Build merged posById and tag nodes with .side
-  const posById = new Map();
-  for (const n of (leftLayout?.nodes || []))   { n.side = 'left';   posById.set(n.id, n); }
-  for (const n of centerLayout.nodes)           { n.side = 'center'; posById.set(n.id, n); }
-  for (const n of (rightLayout?.nodes || []))   { n.side = 'right';  posById.set(n.id, n); }
-
-  // Orphan nodes placed at egoY_final, past the right edge.
-  const allPlacedMaxX = posById.size ? Math.max(...[...posById.values()].map(n => n.x + n.w)) : globalMarginL;
-  const orphanStartX = allPlacedMaxX + EGO_ORPHAN_GAP;
-  let orphanCursor = orphanStartX;
-  const egoYFinal = egoNodeCenter ? egoNodeCenter.y : marginT_val;
-  const orphanNodes = [];
-  for (const p of orphanPersons) {
-    if (posById.has(p.id)) continue;
-    const w = labelWidthOf(p);
-    const n = { id: p.id, person: p, x: orphanCursor, y: egoYFinal, w, h: NODE_H, cx: orphanCursor + w / 2, cy: egoYFinal + AVATAR_R, side: 'none' };
-    orphanNodes.push(n);
-    posById.set(p.id, n);
-    orphanCursor += w + FAMILY_GAP;
-  }
-
-  const mergedNodes = [
-    ...(leftLayout?.nodes || []),
-    ...centerLayout.nodes,
-    ...(rightLayout?.nodes || []),
-    ...orphanNodes,
-  ];
-
-  // Merged links — built from state.edges over placed nodes (cross-universe edges included).
-  const mergedLinks = [];
-  for (const e of state.edges) {
-    const a = posById.get(e.from_id), b = posById.get(e.to_id);
-    if (a && b) mergedLinks.push({ e, a, b });
-  }
-
-  // Merge Maps and Sets from sub-layouts.
-  function mergeMaps(...maps) {
-    const m = new Map();
-    for (const src of maps) { if (src) for (const [k, v] of src) m.set(k, v); }
-    return m;
-  }
-  function mergeSets(...sets) {
-    const s = new Set();
-    for (const src of sets) { if (src) for (const v of src) s.add(v); }
-    return s;
-  }
-
-  const mergedSlotByAnchor          = mergeMaps(leftLayout?.slotByAnchor,          centerLayout.slotByAnchor,          rightLayout?.slotByAnchor);
-  const mergedSlotPos                = mergeMaps(leftLayout?.slotPos,                centerLayout.slotPos,                rightLayout?.slotPos);
-  const mergedChildSlotsOfAnchor     = mergeMaps(leftLayout?.childSlotsOfAnchor,     centerLayout.childSlotsOfAnchor,     rightLayout?.childSlotsOfAnchor);
-  const mergedSatelliteOf            = mergeMaps(leftLayout?.satelliteOf,            centerLayout.satelliteOf,            rightLayout?.satelliteOf);
-  const mergedSpouseEdges            = mergeMaps(leftLayout?.spouseEdges,            centerLayout.spouseEdges,            rightLayout?.spouseEdges);
-  const mergedForcedSatelliteOf      = mergeMaps(leftLayout?.forcedSatelliteOf,      centerLayout.forcedSatelliteOf,      rightLayout?.forcedSatelliteOf);
-  const mergedParentOf               = mergeMaps(leftLayout?.parentOf,               centerLayout.parentOf,               rightLayout?.parentOf);
-  const mergedPrimaryPartnerOf       = mergeMaps(leftLayout?.primaryPartnerOf,       centerLayout.primaryPartnerOf,       rightLayout?.primaryPartnerOf);
-  const mergedIsAnchor               = mergeSets(leftLayout?.isAnchor,               centerLayout.isAnchor,               rightLayout?.isAnchor);
-  const mergedUpstreamNodes          = [...(leftLayout?.upstreamNodes || []),         ...centerLayout.upstreamNodes,        ...(rightLayout?.upstreamNodes || [])];
-  const mergedUpstreamSpouseKeys     = mergeSets(leftLayout?.upstreamSpouseKeys,     centerLayout.upstreamSpouseKeys,     rightLayout?.upstreamSpouseKeys);
-  const mergedUpstreamParentEdgeKeys = mergeSets(leftLayout?.upstreamParentEdgeKeys, centerLayout.upstreamParentEdgeKeys, rightLayout?.upstreamParentEdgeKeys);
-  const mergedWantedUpstreamSpouseKeys = mergeSets(leftLayout?.wantedUpstreamSpouseKeys, centerLayout.wantedUpstreamSpouseKeys, rightLayout?.wantedUpstreamSpouseKeys);
-
-  const totalW = (mergedNodes.length ? Math.max(...mergedNodes.map(n => n.x + n.w)) : globalMarginL) + 80;
-  const totalH = (mergedNodes.length ? Math.max(...mergedNodes.map(n => n.y + n.h)) : marginT_val)   + 60;
-
-  const overlaps = scanOverlaps(mergedNodes);
-
-  return {
-    nodes: mergedNodes, links: mergedLinks, posById,
-    slotByAnchor: mergedSlotByAnchor, slotPos: mergedSlotPos,
-    childSlotsOfAnchor: mergedChildSlotsOfAnchor, satelliteOf: mergedSatelliteOf,
-    spouseEdges: mergedSpouseEdges, forcedSatelliteOf: mergedForcedSatelliteOf,
-    parentOf: mergedParentOf, primaryPartnerOf: mergedPrimaryPartnerOf,
-    isAnchor: mergedIsAnchor,
-    upstreamNodes: mergedUpstreamNodes, upstreamSpouseKeys: mergedUpstreamSpouseKeys,
-    upstreamParentEdgeKeys: mergedUpstreamParentEdgeKeys,
-    wantedUpstreamSpouseKeys: mergedWantedUpstreamSpouseKeys,
-    overlaps, totalW, totalH, marginL: globalMarginL, marginT: marginT_val,
   };
 }
 
