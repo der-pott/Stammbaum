@@ -1585,12 +1585,22 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
 .closed-hit-group-imported  { border-left: 2px solid var(--c-info,   #4a7bb0); padding-left: var(--sp-3); }
 .manual-url-flash {
   position: fixed; bottom: 24px; right: 24px; z-index: 9999;
-  max-width: 420px; padding: 12px 16px;
+  max-width: 460px; padding: 12px 16px;
   background: var(--surface-raised); color: var(--ink);
   border: 1px solid var(--c-accept, #2a7a4b); border-left-width: 4px;
   border-radius: var(--radius-md); box-shadow: 0 8px 24px rgba(0,0,0,0.18);
   font-size: 13px; line-height: 1.5;
+  display: flex; align-items: center; gap: 12px;
 }
+.manual-url-flash.flash-success { border-left-color: var(--c-accept, #2a7a4b); }
+.manual-url-flash.flash-info    { border-left-color: var(--c-info, #4a7bb0); }
+.manual-url-flash.flash-error   { border-left-color: var(--c-danger, #a33); }
+.manual-url-flash .flash-link-btn {
+  flex-shrink: 0; padding: 4px 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--line); background: transparent; color: var(--ink);
+  cursor: pointer; font-size: 12px;
+}
+.manual-url-flash .flash-link-btn:hover { background: var(--surface); }
 .ai-hit-source-header {
   padding: var(--sp-2) var(--sp-3);
   margin-bottom: var(--sp-3);

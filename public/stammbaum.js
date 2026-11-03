@@ -2919,6 +2919,63 @@ function renderClosedHitRow(hit, personId) {
   return row;
 }
 
+async function autoApplyReview(personId, review) {
+  const s = review.suggestions || {};
+  // Alle Buckets AUSSER contradictions (sind Hinweise, keine applicable Fakten)
+  const AUTO_APPLY_BUCKETS = [
+    'new_persons', 'new_edges', 'new_residences', 'residence_updates',
+    'job_updates', 'field_updates', 'new_jobs', 'new_education', 'new_anecdotes',
+  ];
+  const accepted = {};
+  let total = 0;
+  for (const bucket of AUTO_APPLY_BUCKETS) {
+    const items = s[bucket] || [];
+    if (!items.length) continue;
+    accepted[bucket] = items.map((_, i) => i);
+    total += items.length;
+  }
+  if (!total) {
+    showFlash('KI-Analyse: keine neuen Fakten gefunden.', 'info');
+    return;
+  }
+  try {
+    const r = await api.aiReviewApply(review.review_id, accepted);
+    const applied = r.applied || total;
+    const skipped = (r.skipped || []).length;
+    let msg = `${applied} Fakten aus bestätigter Quelle übernommen`;
+    if (skipped) msg += ` · ${skipped} als Duplikat übersprungen`;
+    if ((s.contradictions || []).length) msg += ` · ${s.contradictions.length} Widersprüche zur Prüfung`;
+    showFlash(msg, 'success', review.review_id);
+  } catch (e) {
+    showFlash('Auto-Apply fehlgeschlagen: ' + (e.message || e) + ' — Modal öffnen zum manuellen Prüfen.', 'error');
+    openAiReviewDialogWithData(personId, review);
+  }
+}
+
+function showFlash(msg, variant = 'info', reviewId = null) {
+  const flash = document.createElement('div');
+  flash.className = `manual-url-flash flash-${variant}`;
+  flash.textContent = msg;
+  if (reviewId) {
+    const btn = document.createElement('button');
+    btn.textContent = 'Details';
+    btn.className = 'flash-link-btn';
+    btn.onclick = async () => {
+      try {
+        const full = await api.getReview(reviewId);
+        openAiReviewDialogWithData(_aiReview.personId || state.selectedPersonId, {
+          review_id: full.id, suggestions: full.suggestions,
+          source_hit_title: 'auto-übernommene Quelle',
+        });
+        flash.remove();
+      } catch (e) { alert(e.message); }
+    };
+    flash.appendChild(btn);
+  }
+  document.body.appendChild(flash);
+  setTimeout(() => flash.remove(), 10000);
+}
+
 function renderOpenReviews(parent, reviews, personId) {
   const box = h('div', { class: 'open-reviews-box' },
     h('div', { class: 'open-reviews-head' },
@@ -3075,13 +3132,23 @@ function renderHit(hit, personId) {
     state.role === 'editor' && (hit.status === 'pending' || !hit.status) ? h('div', { class: 'hit-actions' },
       btnOutline('✓ Bestätigen', async () => {
         const r = await api.applyHit(hit.id, 'accept');
+        if (r?.review?.review_id && r.review.suggestions) {
+          // Auto-Apply: Nutzer hat die Quelle bestätigt → alle extrahierten
+          // Fakten gelten als bestätigt und werden ohne Einzel-Freigabe
+          // übernommen. Contradictions ausgenommen (sind Hinweise, keine Fakten).
+          await autoApplyReview(personId, r.review);
+        }
         await loadResearchHits(personId);
-        // Hit-focused review im Payload? → Review-Dialog mit diesen
-        // Vorschlägen öffnen; User bestätigt einzeln.
+        await reload();
+      }, 'small btn-accept'),
+      btnOutline('✓ + prüfen', async () => {
+        // Alternativer Weg: User will doch pro Checkbox entscheiden.
+        const r = await api.applyHit(hit.id, 'accept');
+        await loadResearchHits(personId);
         if (r?.review?.review_id && r.review.suggestions) {
           openAiReviewDialogWithData(personId, r.review);
         }
-      }, 'small btn-accept'),
+      }, 'small'),
       btnOutline('Notiz', async () => { await api.applyHit(hit.id, 'add_source_note'); await loadResearchHits(personId); await reload(); }, 'small'),
       btnOutline('Verwerfen', async () => { await api.applyHit(hit.id, 'dismiss'); await loadResearchHits(personId); }, 'small btn-danger'),
     ) : state.role === 'editor' && hit.status === 'accepted' ? h('div', { class: 'hit-actions' },
