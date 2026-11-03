@@ -76,6 +76,7 @@ const sandbox = {
 sandbox.globalThis = sandbox;
 sandbox.self = sandbox;
 sandbox.OffscreenCanvas = undefined;
+sandbox.location = { hash: '', search: '', pathname: '/', href: 'https://stammbaum.p-m-pott.de/' };
 
 sandbox.__persons = tree.persons;
 sandbox.__edges = tree.edges;
