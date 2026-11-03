@@ -40,84 +40,34 @@ const PORTALS = [
   { key: 'la_th',          land: 'Thüringen',           label: 'Landesarchiv Thüringen',     host: 'www.thueringen.de',           deepLink: () => 'https://www.thueringen.de/th2/staatsarchive/' },
 ];
 
-const MAX_VARIANTS = 2;
-const RESULTS_PER_PORTAL = 3;
-
+// archive_de ist bewusst OFFLINE: liefert sofort pro Portal eine Verweis-Karte
+// mit Deep-Link zur Portal-Suche (soweit stabil) oder zur Portal-Startseite.
+// Grund: 12 Portale × Firecrawl-Suche pro Variante würde das 90s-Timeout
+// sprengen, und der Firecrawl-Index deckt die wenigsten Archiv-Hosts gut ab.
+// So bleibt die Recherche-Übersicht vollständig und der Nutzer öffnet selbst,
+// was ihn interessiert. Spezielle Scraper (Berlin, NRW, Arcinsys) liefern
+// weiterhin echte Treffer über ihre eigenen Source-Keys.
 export async function search(person) {
-  const { full, variants, surname } = nameParts(person);
-  if (!full) return [];
-  if (!surname) return [];
-  const queries = (variants.length ? variants : [{ name: full, primary: true }])
-    .slice(0, MAX_VARIANTS)
-    .map(v => v.name);
+  const { full, surname } = nameParts(person);
+  if (!full || !surname) return [];
 
-  const results = [];
-  const seen = new Set();
-  const surnameLc = surname.toLowerCase();
-  let noBackend = false;
-
-  for (const portal of PORTALS) {
-    const portalHits = [];
-    for (const q of queries) {
-      const r = await webSearch({ query: `"${q}" site:${portal.host}`, limit: 5 });
-      if (!r.ok) {
-        if (r.error === 'no_backend') { noBackend = true; break; }
-        continue;
-      }
-      for (const h of (r.hits || [])) {
-        const u = (h.url || '').toLowerCase();
-        if (!u.includes(portal.host.toLowerCase())) continue;
-        if (seen.has(u)) continue;
-        // Qualitätsfilter: Nachname im Titel/Snippet
-        const hay = ((h.title || '') + ' ' + (h.snippet || '')).toLowerCase();
-        if (!hay.includes(surnameLc)) continue;
-        seen.add(u);
-        portalHits.push({
-          source: 'archive_de',
-          title: `${portal.label}: ${(h.title || '').slice(0, 110)}`,
-          url: h.url,
-          snippet: (h.snippet || '').slice(0, 300),
-          confidence: 0.5,
-          payload: {
-            archival_reference: true,
-            portal: portal.key,
-            land: portal.land,
-            matched_query: q,
-          },
-        });
-        if (portalHits.length >= RESULTS_PER_PORTAL) break;
-      }
-      if (portalHits.length >= RESULTS_PER_PORTAL) break;
-    }
-
-    if (portalHits.length) {
-      results.push(...portalHits);
-    } else if (!noBackend) {
-      // Portal-Hinweis-Karte: direkt-Link, user kann manuell nachsehen
-      const deep = portal.deepLink(full);
-      results.push({
-        source: 'archive_de',
-        title: `${portal.label} — manuelle Suche`,
-        url: deep,
-        snippet: `Firecrawl-Index hat keinen Treffer für "${full}" auf ${portal.host}. Portal-Suche manuell öffnen (${portal.land}).`,
-        confidence: 0.1,
-        payload: {
-          archival_reference: true,
-          portal: portal.key,
-          land: portal.land,
-          manual_hint: true,
-        },
-      });
-    }
-  }
-
-  if (noBackend && !results.length) {
-    return [noBackendHit('archive_de', META.label)];
-  }
-  // Hinweis-Karten (confidence 0.1) nur zeigen wenn gar keine echten Treffer da
-  const real = results.filter(r => r.confidence > 0.2);
-  const hints = results.filter(r => r.confidence <= 0.2);
-  const out = real.length ? real : hints.slice(0, 5);  // bei 0 Treffern nur Top-5 Hint-Karten
-  out.sort((a, b) => b.confidence - a.confidence);
-  return out.slice(0, 20);
+  const results = PORTALS.map(portal => ({
+    source: 'archive_de',
+    title: `${portal.label} — ${portal.land}`,
+    url: portal.deepLink(full),
+    snippet: `Portal manuell öffnen und nach "${full}" suchen. Deckt ${portal.land === 'Bund' ? 'bundesweit' : portal.land} ab.`,
+    confidence: 0.1,
+    payload: {
+      archival_reference: true,
+      portal: portal.key,
+      land: portal.land,
+      manual_hint: true,
+      host: portal.host,
+    },
+  }));
+  return results;
 }
+
+// Dummy-Imports verwenden, damit ESLint/Linter nicht meckert und spätere
+// Rück-Aktivierung des Firecrawl-Suchpfads einfach bleibt.
+void webSearch; void noBackendHit;
