@@ -693,6 +693,7 @@ function computeLayoutDagre() {
     ranker: 'tight-tree'
   });
   g.setDefaultEdgeLabel(() => ({}));
+  g.setDefaultNodeLabel(() => ({ width: NODE_W, height: NODE_H }));
   for (const id of inGraph) {
     const p = byId.get(id);
     if (!p) continue;
@@ -712,6 +713,8 @@ function computeLayoutDagre() {
   const pos = new Map();
   g.nodes().forEach(idStr => {
     const n = g.node(idStr);
+    if (!n || typeof n.x !== 'number' || typeof n.y !== 'number') return;
+    if (!inGraph.has(idStr)) return;  // skip Dagre dummy nodes
     pos.set(idStr, { x: n.x, y: n.y, w: n.width, h: n.height });
   });
 
