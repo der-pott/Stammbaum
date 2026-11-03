@@ -57,6 +57,10 @@ async function processJob(job) {
     person.related_cities = Array.from(cities).filter(Boolean).slice(0, 6);
   } catch { person.related_cities = []; }
   try {
+    person.dismissed_urls = db.prepare(`SELECT url FROM research_hits
+      WHERE person_id=? AND status='dismissed' AND url IS NOT NULL`).all(job.person_id).map(r => r.url);
+  } catch { person.dismissed_urls = []; }
+  try {
     const vrows = db.prepare(`SELECT source, url, title, snippet, payload FROM research_hits
       WHERE person_id=? AND status IN ('accepted','applied','imported') ORDER BY created_at DESC LIMIT 20`).all(job.person_id);
     person.verified_facts = vrows.map(r => {
@@ -79,7 +83,11 @@ async function processJob(job) {
       snippet=excluded.snippet,
       confidence=excluded.confidence,
       payload=excluded.payload,
-      status=CASE WHEN research_hits.payload != excluded.payload THEN 'pending' ELSE research_hits.status END
+      status=CASE
+        WHEN research_hits.status IN ('accepted','dismissed','applied','imported') THEN research_hits.status
+        WHEN research_hits.payload != excluded.payload THEN 'pending'
+        ELSE research_hits.status
+      END
   `);
 
   const onStatus = (key, info) => {

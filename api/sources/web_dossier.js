@@ -254,10 +254,13 @@ export async function search(person) {
   // URL-Scores aggregieren: wie oft wurde dieselbe URL über verschiedene Queries getroffen?
   // Mehrfach-Match = höheres biografisches Signal (verschiedene Facetten der Person
   // zeigen auf dieselbe Quelle).
+  // Dismissed URLs vorab rausfiltern — User hat sie als irrelevant markiert.
+  const dismissed = new Set((person.dismissed_urls || []));
   const byUrl = new Map();
   for (const { q, hits } of perQuery) {
     for (const h of hits) {
       if (!h.url) continue;
+      if (dismissed.has(h.url)) continue;
       const prev = byUrl.get(h.url) || { url: h.url, title: h.title, snippet: h.snippet, matches: 0, queries: [] };
       prev.matches += 1;
       prev.queries.push(q);

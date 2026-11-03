@@ -846,8 +846,16 @@ function gatherBioContext(personId) {
   // Volltexte: max 6 — sonst Prompt-Explosion. Snippets: max 20.
   const trimmedWebContent = webContent.slice(0, 6);
   const trimmedWebSnippets = webSnippets.slice(0, 20);
+  // Abgelehnte Treffer: Claude bekommt diese Negativ-Liste damit er
+  // Personen aus diesen Quellen nicht erneut als new_persons/new_edges
+  // vorschlägt (häufigster Fehler: gleichnamige Namensvettern).
+  const dismissedHits = db.prepare(`
+    SELECT source, url, title FROM research_hits
+    WHERE person_id=? AND status='dismissed' AND url IS NOT NULL
+    ORDER BY created_at DESC LIMIT 50
+  `).all(personId);
   return { person, parents, spouses, children, siblings, jobs, education, residences, anecdotes, military, health, lifeEvents, docCaptions,
-    webContent: trimmedWebContent, webSnippets: trimmedWebSnippets, verifiedFacts };
+    webContent: trimmedWebContent, webSnippets: trimmedWebSnippets, verifiedFacts, dismissedHits };
 }
 
 app.get('/api/persons/:id/biography', requireViewer, (req, res) => {
@@ -1386,6 +1394,12 @@ app.post('/api/persons/:id/research/scrape-source/:key', requireEditor, aiLimite
         markdown: p?.markdown ? p.markdown.slice(0, 2000) : null };
     });
   } catch { person.verified_facts = []; }
+  // Abgelehnte URLs: sources sollen sie nicht erneut scrapen und ins Dossier
+  // hochrangig zurückbringen. web_dossier filtert sie vor dem Deep-Scrape raus.
+  try {
+    person.dismissed_urls = db.prepare(`SELECT url FROM research_hits
+      WHERE person_id=? AND status='dismissed' AND url IS NOT NULL`).all(req.params.id).map(r => r.url);
+  } catch { person.dismissed_urls = []; }
   // Fresh cache for sources that read verified_facts (confidence re-weighting needs re-run)
   const useCache = req.body?.use_cache !== false && !person.verified_facts.length;
   try {
@@ -1397,7 +1411,11 @@ app.post('/api/persons/:id/research/scrape-source/:key', requireEditor, aiLimite
       ON CONFLICT(person_id, source, url) DO UPDATE SET
         title=excluded.title, snippet=excluded.snippet, confidence=excluded.confidence,
         payload=excluded.payload,
-        status=CASE WHEN research_hits.payload != excluded.payload THEN 'pending' ELSE research_hits.status END
+        status=CASE
+          WHEN research_hits.status IN ('accepted','dismissed','applied','imported') THEN research_hits.status
+          WHEN research_hits.payload != excluded.payload THEN 'pending'
+          ELSE research_hits.status
+        END
     `);
     const tx = db.transaction(() => {
       for (const h of result.hits) {

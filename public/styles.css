@@ -1484,6 +1484,69 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
   padding-top: var(--sp-3);
 }
 .ai-section:first-child { border-top: 0; padding-top: 0; }
+.closed-hits {
+  margin-top: var(--sp-4);
+  border-top: 1px solid var(--line-soft, var(--line));
+  padding-top: var(--sp-3);
+}
+.closed-hits-summary {
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  user-select: none;
+}
+.closed-hits-summary:hover { color: var(--ink); }
+.closed-hits-meta {
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--ink-soft);
+  opacity: 0.75;
+}
+.closed-hit-group {
+  margin-top: var(--sp-3);
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--line-soft, var(--line));
+}
+.closed-hit-group-title {
+  font-size: 11px;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: var(--sp-2);
+  opacity: 0.8;
+}
+.closed-hit-row {
+  display: grid;
+  grid-template-columns: 90px 1fr auto;
+  gap: var(--sp-3);
+  padding: 6px 0;
+  align-items: center;
+  border-top: 1px dotted var(--line-soft, var(--line));
+  opacity: 0.78;
+}
+.closed-hit-row:first-of-type { border-top: 0; }
+.closed-hit-src {
+  font-size: 10px;
+  color: var(--ink-soft);
+  letter-spacing: 0.08em;
+  font-family: var(--font-mono, monospace);
+}
+.closed-hit-title { font-size: 13px; }
+.closed-hit-title a { color: var(--ink-soft); text-decoration: none; }
+.closed-hit-title a:hover { color: var(--ink); text-decoration: underline; }
+.closed-hit-snippet { font-size: 11px; color: var(--ink-soft); opacity: 0.7; }
+.closed-hit-group-accepted  { border-left: 2px solid var(--c-accept, #2a7a4b); padding-left: var(--sp-3); }
+.closed-hit-group-dismissed { border-left: 2px solid var(--c-danger, #a33); padding-left: var(--sp-3); }
+.closed-hit-group-applied   { border-left: 2px solid var(--c-info,   #4a7bb0); padding-left: var(--sp-3); }
+.closed-hit-group-imported  { border-left: 2px solid var(--c-info,   #4a7bb0); padding-left: var(--sp-3); }
 .manual-url-flash {
   position: fixed; bottom: 24px; right: 24px; z-index: 9999;
   max-width: 420px; padding: 12px 16px;

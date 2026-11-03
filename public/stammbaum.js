@@ -2764,7 +2764,11 @@ function renderSourceGrid(parent, sources, hits, personId) {
   const counts = {};
   const needsConfigBySource = {};
   for (const hit of hits) {
-    counts[hit.source] = (counts[hit.source] || 0) + 1;
+    // Nur offene Treffer zählen — dismissed/accepted/applied/imported sind
+    // schon entschieden und sollen nicht als "offen" im Grid auftauchen.
+    if (!hit.status || hit.status === 'pending') {
+      counts[hit.source] = (counts[hit.source] || 0) + 1;
+    }
     if (hit.payload && hit.payload.needs_config) needsConfigBySource[hit.source] = hit.payload;
   }
   const grid = h('div', { class: 'source-grid' });
@@ -2816,15 +2820,89 @@ function renderHitsList(parent, hits, personId) {
       'Noch keine externen Treffer gespeichert. "Recherche starten" scannt 17 Quellen.'));
     return;
   }
-  const bySource = {};
-  for (const hit of hits) (bySource[hit.source] ||= []).push(hit);
-  const wrap = h('div', { class: 'hits-wrap' },
-    h('div', { class: 'eyebrow' }, `Treffer (${hits.length})`),
-  );
-  for (const [src, group] of Object.entries(bySource)) {
-    for (const hit of group) wrap.appendChild(renderHit(hit, personId));
+  // Trenne pending (offen zu entscheiden) von abgeschlossenen Entscheidungen
+  // (accepted/dismissed/applied/imported). Pending oben in Haupt-Liste,
+  // abgeschlossene in kollabierbarer "Durchgeführte Recherchen"-Sektion.
+  const pending = [];
+  const closed  = [];
+  for (const hit of hits) {
+    const s = hit.status || 'pending';
+    if (s === 'pending') pending.push(hit);
+    else closed.push(hit);
   }
-  parent.appendChild(wrap);
+  if (pending.length) {
+    const bySource = {};
+    for (const hit of pending) (bySource[hit.source] ||= []).push(hit);
+    const wrap = h('div', { class: 'hits-wrap' },
+      h('div', { class: 'eyebrow' }, `Treffer (${pending.length})`),
+    );
+    for (const group of Object.values(bySource)) {
+      for (const hit of group) wrap.appendChild(renderHit(hit, personId));
+    }
+    parent.appendChild(wrap);
+  } else {
+    parent.appendChild(h('div', { class: 'meta', style: 'margin-top: 12px' },
+      `Keine offenen Treffer. ${closed.length} abgeschlossene Entscheidungen unten.`));
+  }
+  if (closed.length) {
+    parent.appendChild(renderClosedHitsSection(closed, personId));
+  }
+}
+
+function renderClosedHitsSection(closed, personId) {
+  const counts = { accepted: 0, dismissed: 0, applied: 0, imported: 0 };
+  for (const h2 of closed) counts[h2.status] = (counts[h2.status] || 0) + 1;
+  const summary = Object.entries(counts).filter(([, n]) => n > 0)
+    .map(([k, n]) => {
+      const label = { accepted: '✓ bestätigt', dismissed: '✕ abgelehnt', applied: 'Notiz übernommen', imported: 'importiert' }[k] || k;
+      return `${n} ${label}`;
+    }).join(' · ');
+
+  const details = h('details', { class: 'closed-hits' });
+  const sum = h('summary', { class: 'closed-hits-summary' },
+    h('span', {}, `Durchgeführte Recherchen (${closed.length})`),
+    h('span', { class: 'closed-hits-meta' }, summary),
+  );
+  details.appendChild(sum);
+
+  // Nach Status gruppieren, pro Status kompakte Zeile mit Zurücknehmen-Button
+  const byStatus = { accepted: [], dismissed: [], applied: [], imported: [] };
+  for (const h2 of closed) (byStatus[h2.status] ||= []).push(h2);
+  const order = ['accepted', 'dismissed', 'applied', 'imported'];
+  const labels = { accepted: '✓ bestätigt', dismissed: '✕ abgelehnt', applied: 'Notiz übernommen', imported: 'als Bild importiert' };
+  for (const st of order) {
+    const list = byStatus[st] || [];
+    if (!list.length) continue;
+    const grp = h('div', { class: `closed-hit-group closed-hit-group-${st}` },
+      h('div', { class: 'closed-hit-group-title' }, labels[st] + ` (${list.length})`),
+    );
+    for (const hit of list) grp.appendChild(renderClosedHitRow(hit, personId));
+    details.appendChild(grp);
+  }
+  return details;
+}
+
+function renderClosedHitRow(hit, personId) {
+  const row = h('div', { class: 'closed-hit-row' },
+    h('div', { class: 'closed-hit-src' }, (hit.source || '').toUpperCase()),
+    h('div', { class: 'closed-hit-body' },
+      h('div', { class: 'closed-hit-title' },
+        hit.url
+          ? h('a', { href: hit.url, target: '_blank', rel: 'noopener' }, (hit.title || hit.url).slice(0, 100))
+          : h('span', {}, (hit.title || '(ohne Titel)').slice(0, 100))
+      ),
+      hit.snippet ? h('div', { class: 'closed-hit-snippet' }, hit.snippet.slice(0, 180)) : null,
+    ),
+  );
+  if (state.role === 'editor') {
+    row.appendChild(h('div', { class: 'closed-hit-actions' },
+      btnOutline('Zurücknehmen', async () => {
+        await api.applyHit(hit.id, 'reset');
+        await loadResearchHits(personId);
+      }, 'small'),
+    ));
+  }
+  return row;
 }
 
 async function addManualUrl(personId) {

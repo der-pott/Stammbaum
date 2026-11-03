@@ -117,6 +117,12 @@ function buildUserPrompt(ctx, register, alreadyProcessed = []) {
       prompt += `- [${row.category}] ${row.summary} (${row.status} am ${row.applied_at?.slice(0, 10) || '?'})\n`;
     }
   }
+  if (ctx.dismissedHits?.length) {
+    prompt += `\n\n=== VOM NUTZER ALS IRRELEVANT ABGELEHNTE QUELLEN ===\nDiese Quellen hat der Nutzer explizit als NICHT zu dieser Person gehörend markiert. Du darfst sie nicht als Beleg heranziehen. Personen, die ausschließlich in diesen Quellen vorkommen (z.B. gleichnamige Namensvettern), NIEMALS als new_persons oder in new_edges vorschlagen.\n`;
+    for (const d of ctx.dismissedHits.slice(0, 30)) {
+      prompt += `- [${d.source}] ${d.title || '(ohne Titel)'} ${d.url || ''}\n`;
+    }
+  }
   return prompt;
 }
 
@@ -139,6 +145,7 @@ export function hashContext(ctx) {
     webContentUrls: (ctx.webContent || []).map(w => w.url).sort(),
     webSnippetUrls: (ctx.webSnippets || []).map(w => w.url).sort(),
     verifiedUrls: (ctx.verifiedFacts || []).map(w => w.url).sort(),
+    dismissedUrls: (ctx.dismissedHits || []).map(w => w.url).sort(),
   });
   return createHash('sha1').update(canonical).digest('hex');
 }
