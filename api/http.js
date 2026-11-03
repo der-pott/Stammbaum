@@ -69,9 +69,74 @@ export async function httpGet(source, url, { timeout = DEFAULT_TIMEOUT, headers 
 export function nameParts(person) {
   const given = (person.given_name || '').trim();
   const surname = (person.surname || '').trim();
+  const birthName = (person.birth_name || '').trim();
   const firstGiven = given.split(/\s+/)[0] || '';
   const full = [given, surname].filter(Boolean).join(' ').trim();
-  return { given, firstGiven, surname, full };
+  return {
+    given,
+    firstGiven,
+    surname,
+    birthName,
+    full,
+    variants: buildNameVariants({ given, surname, birthName, firstGiven }),
+  };
+}
+
+// Baut sinnvolle Suchnamen-Kombinationen.
+// Deckt ab:
+//  - Mehrere Vornamen: "Erich Herbert Günther" → "Erich Pott", "Herbert Pott", "Günther Pott", "Erich Herbert Günther Pott"
+//  - Doppelnamen mit Bindestrich: "Hans-Peter" → "Hans-Peter", "Hans Peter", "Hans", "Peter"
+//  - Geburtsname (meist bei Frauen): zusätzlich alle Vornamen-Kombinationen mit birth_name als Nachname
+// Return: array of {name, kind, primary} — primary ist Haupt-Variante, der Rest Zusatz-Baselines.
+export function buildNameVariants({ given, surname, birthName, firstGiven }) {
+  if (!given || !surname) return [];
+  const out = [];
+  const seen = new Set();
+  const push = (name, kind, primary = false) => {
+    const n = name.replace(/\s+/g, ' ').trim();
+    if (!n) return;
+    const k = n.toLowerCase();
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push({ name: n, kind, primary });
+  };
+
+  // Haupt-Variante: alle Vornamen + aktueller Nachname
+  push(`${given} ${surname}`, 'full', true);
+
+  // Vornamen-Pool: jeder einzeln + Bindestrich-Splits
+  const givenTokens = given.split(/\s+/).filter(Boolean);
+  const singleFirsts = new Set();
+  for (const tok of givenTokens) {
+    singleFirsts.add(tok);
+    // Bindestrich-Namen zusätzlich auftrennen: "Hans-Peter" → auch "Hans Peter" und "Hans", "Peter"
+    if (/[-]/.test(tok)) {
+      const parts = tok.split('-').map(p => p.trim()).filter(Boolean);
+      // Komplett ohne Bindestrich
+      push(`${parts.join(' ')} ${surname}`, 'hyphen_space');
+      for (const p of parts) singleFirsts.add(p);
+    }
+  }
+
+  // Jeder einzelne Vorname + Nachname (nur wenn Mehrfach-Vornamen)
+  if (givenTokens.length > 1 || Array.from(singleFirsts).some(n => n !== firstGiven)) {
+    for (const first of singleFirsts) {
+      push(`${first} ${surname}`, 'single_given');
+    }
+  }
+
+  // Geburtsname-Varianten
+  if (birthName && birthName.toLowerCase() !== surname.toLowerCase()) {
+    push(`${given} ${birthName}`, 'birthname_full');
+    push(`${firstGiven} ${birthName}`, 'birthname_first');
+    for (const first of singleFirsts) {
+      push(`${first} ${birthName}`, 'birthname_single');
+    }
+    // "geb."-Konvention (bei Trauer- und Standesamt-Dokumenten üblich)
+    push(`${firstGiven} ${surname} geb ${birthName}`, 'birthname_geb');
+  }
+
+  return out;
 }
 
 export function yearOf(s) {

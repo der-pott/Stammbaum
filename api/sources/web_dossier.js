@@ -58,13 +58,15 @@ const MED_FIELDS = [
 ];
 
 function buildQueries(person) {
-  const { full, firstGiven, surname } = nameParts(person);
+  const parts = nameParts(person);
+  const { full, firstGiven, surname, variants } = parts;
   if (!full) return [];
   // Firecrawl Index: Quotes um Full-Name killen Trefferzahl (siehe Test
   // 2026-11-03: `"Michael Radtke" Rostock` → 0 hits, `Michael Radtke
   // Hautklinik Rostock` → 8 hits inkl. cpr.uni-rostock.de). Nackte Namen
   // bevorzugen; nur Quotes bei auffälligen Mehrfach-Vornamen setzen.
   const nameTokens = full.split(/\s+/).filter(Boolean);
+  // Primär-Name für Context-Kombis: kurz (firstGiven+surname) bei 4+ Tokens, sonst full
   const name = nameTokens.length >= 4 ? `"${firstGiven} ${surname}"` : full;
   const birthPlace = (person.birth_place || '').trim();
   const deathPlace = (person.death_place || '').trim();
@@ -83,8 +85,16 @@ function buildQueries(person) {
   const roleKw = roleKeywords(title);
 
   const queries = new Set();
-  // 1) Nackter Name — Baseline
+  // 1) Nackter Name — Baseline (Haupt-Variante)
   queries.add(name);
+  // 1a) Alle weiteren Namens-Varianten als nackte Baseline:
+  //     - Einzelne Vornamen bei Mehrfach-Namen (Erich Herbert Pott → Erich Pott, Herbert Pott)
+  //     - Bindestrich-Namen aufgetrennt (Hans-Peter → Hans Peter, Hans, Peter)
+  //     - Geburtsname (Anna Pott geb. Mustermann → Anna Mustermann, Anna Pott geb Mustermann)
+  for (const v of variants) {
+    if (v.primary) continue;
+    queries.add(v.name);
+  }
   // 1b) Titel voranstellen (hochrelevant: "Prof Dr med Michael Radtke"
   // findet die Fachrichtungs-spezifischen Treffer die der nackte Name
   // nicht liefert). Punkte raus — Firecrawl indexiert ohne Punkte besser.
@@ -118,8 +128,9 @@ function buildQueries(person) {
   }
   // 7) Generische Dossier-Queries (nur wenn andere queries schon da sind)
   queries.add(`${name} Biografie`);
-  // Cap bei 8 (Firecrawl Rate-Cap sequentiell x 1500ms = 12s pro Lauf)
-  return Array.from(queries).slice(0, 8);
+  // Cap bei 12 (Firecrawl Rate-Cap sequentiell x 1500ms = 18s pro Lauf;
+  // bleibt deutlich unter Cloudflare 100s auch mit Fallback-Enum danach).
+  return Array.from(queries).slice(0, 12);
 }
 
 // Fallback-Query-Enumeration: wird nach dem Standard-Lauf aufgerufen wenn

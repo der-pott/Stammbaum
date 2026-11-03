@@ -7,14 +7,32 @@ export const META = { label: 'LinkedIn (öffentlich)', url: 'https://linkedin.co
 
 export async function search(person) {
   if (isPreDigital(person)) return [];
-  const { full } = nameParts(person);
+  const { full, variants } = nameParts(person);
   if (!full) return [];
-  const result = await webSearch({ query: `"${full}"`, siteFilter: 'linkedin.com/in', limit: 10 });
-  if (!result.ok) {
-    if (result.error === 'no_backend') return [noBackendHit('linkedin', 'LinkedIn (öffentlich)')];
-    return [{ source: 'linkedin', title: 'LinkedIn', url: 'https://linkedin.com', snippet: `Zugriff nicht möglich (${result.error})`, confidence: 0, payload: { error: result.error } }];
+  // Mehrere Namens-Varianten durchsuchen (Doppelnamen, einzelne Vornamen,
+  // Geburtsname), damit "Erich Pott" neben "Erich Herbert Günther Pott"
+  // ebenso gefunden wird wie "Anna Mustermann" (geb.) neben "Anna Pott".
+  const seen = new Set();
+  const allHits = [];
+  let lastError = null;
+  for (const v of variants.slice(0, 5)) {
+    const result = await webSearch({ query: `"${v.name}"`, siteFilter: 'linkedin.com/in', limit: 10 });
+    if (!result.ok) {
+      if (result.error === 'no_backend') return [noBackendHit('linkedin', 'LinkedIn (öffentlich)')];
+      lastError = result.error;
+      continue;
+    }
+    for (const h of (result.hits || [])) {
+      const u = (h.url || '').toLowerCase();
+      if (seen.has(u)) continue;
+      seen.add(u);
+      allHits.push(h);
+    }
   }
-  const profiles = result.hits.filter(h => /linkedin\.com\/in\//i.test(h.url || ''));
+  if (!allHits.length && lastError) {
+    return [{ source: 'linkedin', title: 'LinkedIn', url: 'https://linkedin.com', snippet: `Zugriff nicht möglich (${lastError})`, confidence: 0, payload: { error: lastError } }];
+  }
+  const profiles = allHits.filter(h => /linkedin\.com\/in\//i.test(h.url || ''));
   if (!profiles.length) {
     return [{ source: 'linkedin', title: 'LinkedIn', url: `https://search.brave.com/search?q=${encodeURIComponent('"' + full + '" site:linkedin.com/in')}`, snippet: 'Keine öffentlichen Profile im Index.', confidence: 0, payload: { empty: true } }];
   }
@@ -36,7 +54,7 @@ export async function search(person) {
       url: h.url,
       snippet: (h.snippet || 'LinkedIn-Profil').slice(0, 240),
       confidence: Math.min(1, confidence),
-      payload: { profile_url: h.url, headline: h.snippet, backend: result.backend },
+      payload: { profile_url: h.url, headline: h.snippet, backend: h.backend || 'firecrawl' },
     };
   });
 }

@@ -26,40 +26,44 @@ export async function search(person) {
       payload: { skipped: 'pre_digital' },
     }];
   }
-  const { given, firstGiven, surname, full } = nameParts(person);
+  const { given, firstGiven, surname, full, variants, birthName } = nameParts(person);
   if (!full) return [];
 
   const location = (person.death_place || person.birth_place || '').trim();
-  const params = new URLSearchParams({ name: full });
-  if (location) params.set('location', location);
-  const url = `https://www.trauer.de/suche?${params.toString()}`;
+  // Trauer.de nachsuchen über alle sinnvollen Namensvarianten (Doppelnamen,
+  // einzelne Vornamen, Geburtsname). Nachname-Trefferfilter weiter unten
+  // akzeptiert sowohl aktuellen Nachnamen als auch Geburtsnamen.
+  const queries = variants.slice(0, 5).map(v => v.name);
+  if (!queries.length) queries.push(full);
 
-  const r = await fetchPage('trauer', url, { timeout: 12_000 });
-  if (!r.ok) {
-    if (r.status === 403 || r.status === 503) {
-      return [needsFirecrawlCard('trauer', LABEL, url, `HTTP ${r.status}`)];
+  const birth = yearOf(person.birth_date);
+  const death = yearOf(person.death_date);
+  const givenLc = firstGiven.toLowerCase();
+  const surnameLc = surname.toLowerCase();
+  const birthNameLc = (birthName || '').toLowerCase();
+  const seen = new Set();
+  const hits = [];
+  let lastError = null;
+  let lastUrl = '';
+
+  for (const q of queries) {
+    const params = new URLSearchParams({ name: q });
+    if (location) params.set('location', location);
+    const url = `https://www.trauer.de/suche?${params.toString()}`;
+    lastUrl = url;
+
+    const r = await fetchPage('trauer', url, { timeout: 12_000 });
+    if (!r.ok) {
+      if (r.status === 403 || r.status === 503) {
+        return [needsFirecrawlCard('trauer', LABEL, url, `HTTP ${r.status}`)];
+      }
+      lastError = r.error;
+      continue;
     }
-    return [{
-      source: 'trauer',
-      title: LABEL,
-      url,
-      snippet: `Zugriff fehlgeschlagen (${r.error})`,
-      confidence: 0,
-      payload: { error: r.error },
-    }];
-  }
-
-  const html = r.html || r.text || '';
-  try {
-    const $ = cheerio.load(html);
-    const birth = yearOf(person.birth_date);
-    const death = yearOf(person.death_date);
-    const surnameLc = surname.toLowerCase();
-    const givenLc = firstGiven.toLowerCase();
-
+    const html = r.html || r.text || '';
+    try {
+      const $ = cheerio.load(html);
     // Alle Links mit "/traueranzeige/" einsammeln, Host egal.
-    const seen = new Set();
-    const hits = [];
     $('a[href*="/traueranzeige/"]').each((_, el) => {
       const $a = $(el);
       const rawHref = ($a.attr('href') || '').trim();
@@ -77,11 +81,16 @@ export async function search(person) {
       if (!container.length) container = $a.parent();
       const snippet = (container.text() || linkText).replace(/\s+/g, ' ').trim().slice(0, 280);
 
-      // Nachname exakt nachfiltern (als Wortgrenze)
+      // Nachname (oder Geburtsname) exakt nachfiltern (als Wortgrenze)
       const haystack = (linkText + ' ' + snippet).toLowerCase();
       if (!surnameLc) return;
-      const surnameRe = new RegExp(`(^|[^a-z\u00e4\u00f6\u00fc\u00df])${surnameLc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z\u00e4\u00f6\u00fc\u00df]|$)`, 'i');
-      if (!surnameRe.test(haystack)) return;
+      const escape = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const surnameRe = new RegExp(`(^|[^a-zäöüß])${escape(surnameLc)}([^a-zäöüß]|$)`, 'i');
+      const birthNameRe = birthNameLc
+        ? new RegExp(`(^|[^a-zäöüß])${escape(birthNameLc)}([^a-zäöüß]|$)`, 'i')
+        : null;
+      const nameMatch = surnameRe.test(haystack) || (birthNameRe && birthNameRe.test(haystack));
+      if (!nameMatch) return;
 
       // Confidence
       let confidence = 0.5; // Nachname match
@@ -98,32 +107,36 @@ export async function search(person) {
         url: abs,
         snippet,
         confidence,
-        payload: { obituary: true, link_text: linkText.slice(0, 160) },
+        payload: { obituary: true, link_text: linkText.slice(0, 160), matched_query: q },
       });
     });
+    } catch (err) {
+      lastError = err.message;
+      continue;
+    }
+  }
 
-    if (!hits.length) {
+  if (!hits.length) {
+    if (lastError) {
       return [{
         source: 'trauer',
         title: LABEL,
-        url,
-        snippet: 'Keine Nachrufe gefunden (nach Nachnamen-Filter).',
+        url: lastUrl,
+        snippet: `Zugriff fehlgeschlagen (${lastError})`,
         confidence: 0,
-        payload: { empty: true },
+        payload: { error: lastError },
       }];
     }
-
-    // Nach Confidence sortieren, Top 10
-    hits.sort((a, b) => b.confidence - a.confidence);
-    return hits.slice(0, 10);
-  } catch (err) {
     return [{
       source: 'trauer',
       title: LABEL,
-      url,
-      snippet: 'Parsing-Fehler.',
+      url: lastUrl,
+      snippet: 'Keine Nachrufe gefunden (nach Nachnamen-Filter).',
       confidence: 0,
-      payload: { error: err.message },
+      payload: { empty: true },
     }];
   }
+
+  hits.sort((a, b) => b.confidence - a.confidence);
+  return hits.slice(0, 10);
 }
