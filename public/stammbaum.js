@@ -2250,25 +2250,28 @@ function renderTree() {
       belowY += 14;
     }
 
-    // "geb. <Surname>" label when this person is a forced-satellite with
-    // birth parents in another sub-tree (classic Genealogie convention).
+    // "geb. <Surname>" label — immer wenn Geburtsname ≠ aktueller Nachname,
+    // unabhaengig von Layout-Rolle oder ob Lebensdaten vorhanden sind.
+    // Fallback fuer Forced-Satellites ohne eigenen birth_name: Nachname eines
+    // Elternteils (klassische Genealogie-Konvention).
     const forcedSatMap = state.layout?.forcedSatelliteOf;
-    if (forcedSatMap?.has(n.id)) {
-      const parEdges = state.edges.filter(e => e.type === 'parent' && e.to_id === n.id);
-      const birthSurname = (() => {
-        if (n.person.birth_name && n.person.birth_name !== n.person.surname) return n.person.birth_name;
+    const birthSurname = (() => {
+      if (n.person.birth_name && n.person.birth_name !== n.person.surname) {
+        return n.person.birth_name;
+      }
+      if (forcedSatMap?.has(n.id)) {
+        const parEdges = state.edges.filter(e => e.type === 'parent' && e.to_id === n.id);
         for (const e of parEdges) {
           const par = state.persons.find(x => x.id === e.from_id);
           const s = par?.surname;
           if (s && s !== n.person.surname) return s;
         }
-        return null;
-      })();
-      if (parEdges.length) {
-        const text = birthSurname ? `geb. ${birthSurname}` : 'geb.';
-        const gebT = textEl(n.w / 2, belowY, text, { anchor: 'middle', cls: 'node-geb' });
-        g.appendChild(gebT);
       }
+      return null;
+    })();
+    if (birthSurname) {
+      const gebT = textEl(n.w / 2, belowY, `geb. ${birthSurname}`, { anchor: 'middle', cls: 'node-geb' });
+      g.appendChild(gebT);
     }
 
     g.onclick = () => { if (!state.editMode) select(n.id); };
