@@ -310,6 +310,28 @@
   </menu>
 </dialog>
 
+<dialog id="ai-research-dialog" aria-labelledby="ai-research-title">
+  <h3 id="ai-research-title">KI-Vollrecherche</h3>
+  <div id="ai-research-body">Lade…</div>
+  <menu class="btn-row">
+    <button value="cancel" id="ai-research-cancel">Schließen</button>
+    <button id="ai-research-select-all" type="button">Alle wählen</button>
+    <button id="ai-research-select-none" type="button">Keine</button>
+    <button id="ai-research-apply" type="button" class="btn-primary">Übernehmen</button>
+  </menu>
+</dialog>
+<dialog id="ai-research-yearspan-dialog" aria-labelledby="ai-yearspan-title">
+  <h3 id="ai-yearspan-title">Zeitspanne eingrenzen</h3>
+  <p>Lebensdaten unbekannt. Grober Zeitraum für die Recherche:</p>
+  <label>von <input id="ai-yearspan-from" type="number" min="1700" max="2026"></label>
+  <label>bis <input id="ai-yearspan-to" type="number" min="1700" max="2026"></label>
+  <div id="ai-yearspan-error" class="error" role="alert" style="color:#c33;display:none;"></div>
+  <menu class="btn-row">
+    <button value="cancel" id="ai-yearspan-cancel">Abbrechen</button>
+    <button id="ai-yearspan-ok" type="button" class="btn-primary">Weiter</button>
+  </menu>
+</dialog>
+
 <dialog id="recycle-dialog" class="dlg dlg-recycle" aria-label="Papierkorb">
   <h2 class="dlg-title">Papierkorb</h2>
   <p class="dlg-sub">Gelöschte Einträge werden nach 90 Tagen automatisch endgültig entfernt. Du kannst sie hier wiederherstellen oder jetzt endgültig löschen.</p>
@@ -380,6 +402,6 @@
 
 <div id="toasts" class="toasts" aria-live="polite"></div>
 
-<script src="stammbaum.js?v=73" defer></script>
+<script src="stammbaum.js?v=74" defer></script>
 </body>
 </html>

@@ -71,6 +71,8 @@ const api = {
   async aiReviewApply(review_id, accepted) {
     return j(await fetch(`/api/ai-reviews/${review_id}/apply`, postJson({ accepted })));
   },
+  async aiResearch(person_id, body) { return j(await fetch(`/api/persons/${person_id}/ai-research`, postJson(body || {}))); },
+  async getAiResearch(review_id) { return j(await fetch(`/api/ai-reviews/${review_id}`)); },
   async listSub(person_id, kind) {
     return j(await fetch(`/api/persons/${person_id}/${kind}`));
   },
@@ -2307,6 +2309,15 @@ function renderDetail() {
     const actions = h('div', { class: 'actions' });
     actions.appendChild(btnOutline('Bearbeiten', () => openPersonDialog(p)));
     actions.appendChild(btnOutline('✨ KI-Update', () => openAiReviewDialog(p.id)));
+    (() => {
+      const eligible = fullResearchEligible(p, { parents });
+      const btn = btnOutline('✨ KI-Vollrecherche', () => openAiResearchDialog(p.id, p));
+      if (!eligible) {
+        btn.disabled = true;
+        btn.title = 'Mindestens Vor- und Nachname plus drei weitere Angaben (Lebensdaten, Ort, Eltern, Wohnsitz, Beruf oder Notizen) nötig.';
+      }
+      actions.appendChild(btn);
+    })();
     actions.appendChild(btnOutline('📎 Dokument', () => openImageUpload(p.id)));
     actions.appendChild(btnOutline('Löschen', async () => {
       if (!confirm(`${nameOf(p)} löschen?`)) return;
@@ -4163,6 +4174,215 @@ function wireAiReviewHandlers() {
     }
   };
 }
+
+// --- KI-Vollrecherche start ---
+
+function fullResearchEligible(p, lists) {
+  if (!p.given_name || !p.surname) return false;
+  let n = 0;
+  if (p.birth_date) n++;
+  if (p.death_date) n++;
+  if (p.birth_place) n++;
+  if (p.death_place) n++;
+  if ((lists.parents || []).length >= 1) n++;
+  if (p.notes && p.notes.trim().length > 0) n++;
+  return n >= 3;
+}
+
+const _aiResearch = { reviewId: null, suggestions: null, personId: null };
+let _aiResearchHandlersWired = false;
+
+function wireAiResearchHandlers() {
+  if (_aiResearchHandlersWired) return;
+  _aiResearchHandlersWired = true;
+
+  document.getElementById('ai-research-cancel').onclick = () => {
+    document.getElementById('ai-research-dialog').close();
+  };
+
+  document.getElementById('ai-research-select-all').onclick = () => {
+    const body = document.getElementById('ai-research-body');
+    body.querySelectorAll('input[type="checkbox"]:not([disabled])').forEach(c => { c.checked = true; });
+  };
+
+  document.getElementById('ai-research-select-none').onclick = () => {
+    const body = document.getElementById('ai-research-body');
+    body.querySelectorAll('input[type="checkbox"]:not([disabled])').forEach(c => { c.checked = false; });
+  };
+
+  document.getElementById('ai-research-apply').onclick = async (ev) => {
+    const btn = ev.currentTarget;
+    const body = document.getElementById('ai-research-body');
+    if (!_aiResearch.reviewId) return;
+    const accepted = {};
+    for (const b of AI_BUCKETS) {
+      if (b.key === 'contradictions') continue;
+      accepted[b.key] = Array.from(body.querySelectorAll(`input[data-bucket="${b.key}"]:checked`))
+        .map(c => parseInt(c.getAttribute('data-idx'), 10));
+    }
+    btn.disabled = true;
+    btn.textContent = 'Übernehme…';
+    try {
+      const result = await api.aiReviewApply(_aiResearch.reviewId, accepted);
+      document.getElementById('ai-research-dialog').close();
+      await reload();
+      renderDetail();
+      const parts = [`${result.applied} von ${result.requested} angewendet`];
+      if (result.skipped?.length) parts.push(`${result.skipped.length} als Duplikat übersprungen`);
+      if (result.stale?.length) parts.push(`${result.stale.length} veraltet (übersprungen)`);
+      if (result.errors?.length) parts.push(`${result.errors.length} Fehler`);
+      alert(parts.join(', '));
+    } catch (e) {
+      alert('Fehler: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Übernehmen';
+    }
+  };
+}
+
+function renderAiResearchItem(bucket, item) {
+  const wrap = renderAiItem(bucket, item);
+  // Source badge
+  if (item.source_url) {
+    try {
+      const hostname = new URL(item.source_url).hostname;
+      const badge = document.createElement('a');
+      badge.href = item.source_url;
+      badge.target = '_blank';
+      badge.rel = 'noopener noreferrer';
+      badge.className = 'ai-source-badge';
+      badge.textContent = hostname;
+      wrap.appendChild(badge);
+    } catch { /* invalid URL, skip badge */ }
+  }
+  // Source quote details
+  if (item.source_quote) {
+    const det = document.createElement('details');
+    det.className = 'ai-source-details';
+    const sum = document.createElement('summary');
+    sum.textContent = 'Quelle';
+    det.appendChild(sum);
+    const bq = document.createElement('blockquote');
+    bq.textContent = item.source_quote;
+    det.appendChild(bq);
+    wrap.appendChild(det);
+  }
+  // Conflict badge
+  if (item.conflicts_with || item.conflicts_field) {
+    const badge = document.createElement('span');
+    badge.className = 'ai-conflict-badge';
+    badge.style.cssText = 'color:#c33;font-size:0.8em;margin-left:0.4em;';
+    badge.textContent = '⚠ Konflikt';
+    wrap.appendChild(badge);
+  }
+  return wrap;
+}
+
+function renderAiResearchSuggestions(s) {
+  const body = document.getElementById('ai-research-body');
+  body.innerHTML = '';
+  let totalCount = 0;
+  for (const b of AI_BUCKETS) {
+    const items = Array.isArray(s[b.key]) ? s[b.key] : [];
+    const section = h('div', { class: 'ai-section', 'data-bucket': b.key });
+    section.appendChild(h('h3', { class: 'ai-section-title' }, `${b.title} (${items.length})`));
+    if (!items.length) {
+      section.appendChild(h('div', { class: 'ai-empty' }, b.empty));
+    } else {
+      const list = h('div', { class: 'ai-list' });
+      items.forEach((item, idx) => {
+        const row = h('label', { class: 'ai-row' });
+        const checkbox = h('input', { type: 'checkbox', 'data-bucket': b.key, 'data-idx': String(idx) });
+        // Pre-check all except contradictions and conflict items
+        if (b.key !== 'contradictions' && !item.conflicts_with && !item.conflicts_field) {
+          checkbox.checked = true;
+        } else {
+          checkbox.disabled = b.key === 'contradictions';
+        }
+        row.appendChild(checkbox);
+        row.appendChild(renderAiResearchItem(b.key, item));
+        list.appendChild(row);
+        totalCount++;
+      });
+      section.appendChild(list);
+    }
+    body.appendChild(section);
+  }
+  if (totalCount === 0) {
+    body.insertAdjacentHTML('afterbegin', '<div class="ai-empty-all">Keine Vorschläge — die Daten sind sauber.</div>');
+  }
+}
+
+async function startAiResearch(personId, body) {
+  const dlg = document.getElementById('ai-research-dialog');
+  const resBody = document.getElementById('ai-research-body');
+  const applyBtn = document.getElementById('ai-research-apply');
+  _aiResearch.reviewId = null;
+  _aiResearch.suggestions = null;
+  _aiResearch.personId = personId;
+  applyBtn.disabled = true;
+  resBody.innerHTML = '<div class="ai-loading"><span class="ai-spinner"></span> Vollrecherche läuft… (30–90 Sek)</div>';
+  wireAiResearchHandlers();
+  dlg.showModal();
+  try {
+    const result = await api.aiResearch(personId, body);
+    _aiResearch.reviewId = result.review_id;
+    _aiResearch.suggestions = result.suggestions;
+    resBody.innerHTML = '';
+    if (result.cached) {
+      resBody.insertAdjacentHTML('afterbegin',
+        '<div class="ai-unchanged">⟳ Kontext unverändert — gespeicherte Vorschläge werden gezeigt.</div>');
+    }
+    if (result.sources_summary) {
+      const s = result.sources_summary;
+      resBody.insertAdjacentHTML('beforeend',
+        `<div class="ai-hint" style="margin-bottom:0.5em">${s.used_hits} von ${s.total_hits} Treffern analysiert${s.dropped_hits ? ` (${s.dropped_hits} gekürzt)` : ''}.</div>`);
+    }
+    renderAiResearchSuggestions(result.suggestions);
+    applyBtn.disabled = false;
+  } catch (e) {
+    resBody.innerHTML = `<div class="ai-error">Fehler: ${escapeHtml(e.message || String(e))}</div>`;
+  }
+}
+
+function openAiResearchDialog(personId, person) {
+  const birth_year = person.birth_date ? parseInt(person.birth_date, 10) : null;
+  const death_year = person.death_date ? parseInt(person.death_date, 10) : null;
+  if (!birth_year && !death_year) {
+    // Open yearspan modal first
+    const spanDlg = document.getElementById('ai-research-yearspan-dialog');
+    const errEl = document.getElementById('ai-yearspan-error');
+    errEl.style.display = 'none';
+    document.getElementById('ai-yearspan-from').value = '';
+    document.getElementById('ai-yearspan-to').value = '';
+    spanDlg.showModal();
+
+    document.getElementById('ai-yearspan-from').focus();
+    const handleYearspanOk = () => {
+      const from = parseInt(document.getElementById('ai-yearspan-from').value, 10);
+      const to = parseInt(document.getElementById('ai-yearspan-to').value, 10);
+      const currentYear = new Date().getFullYear();
+      if (!Number.isInteger(from) || !Number.isInteger(to) || from >= to ||
+          from < 1700 || from > currentYear || to < 1700 || to > currentYear) {
+        errEl.textContent = 'Ungültige Zeitspanne. Bitte gültige Jahrzahlen eingeben (1700–' + currentYear + ', von < bis).';
+        errEl.style.display = '';
+        return;
+      }
+      spanDlg.close();
+      startAiResearch(personId, { year_span: { from, to } });
+    };
+    const onYearspanKey = (ev) => { if (ev.key === 'Enter') handleYearspanOk(); };
+    document.getElementById('ai-yearspan-cancel').onclick = () => spanDlg.close();
+    document.getElementById('ai-yearspan-ok').onclick = handleYearspanOk;
+    document.getElementById('ai-yearspan-from').addEventListener('keydown', onYearspanKey);
+    document.getElementById('ai-yearspan-to').addEventListener('keydown', onYearspanKey);
+  } else {
+    startAiResearch(personId, {});
+  }
+}
+
+// --- KI-Vollrecherche end ---
 
 /* --- Cologne Phonetic (client, same algorithm as api/phonetic.js) --- */
 function colognePhonetic(input) {
