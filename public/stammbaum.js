@@ -2282,27 +2282,33 @@ function renderTree() {
         if (ev.button !== 0) return;
         ev.preventDefault(); ev.stopPropagation();
         const startClientX = ev.clientX;
-        const startX = n.x;
         const prev = state.posOverrides[n.id]?.dx || 0;
-        const svg = document.getElementById('tree');
-        const canvasRect = svg.getBoundingClientRect();
         const k = state.pz.k;
         g.setPointerCapture?.(ev.pointerId);
         g.classList.add('dragging');
+        let lastSnapped = 0;
+        let rafId = null;
         const onMove = (mv) => {
           const dxClient = mv.clientX - startClientX;
           const dxWorld = dxClient / k;
           const snapped = Math.round(dxWorld / GRID_X) * GRID_X;
-          g.setAttribute('transform', `translate(${startX + snapped} ${n.y})`);
-          g.dataset.pendingDx = String(prev + snapped);
+          if (snapped === lastSnapped) return;
+          lastSnapped = snapped;
+          // Update override + full re-render on next frame (throttled).
+          state.posOverrides[n.id] = { dx: prev + snapped };
+          if (prev + snapped === 0) delete state.posOverrides[n.id];
+          if (!rafId) {
+            rafId = requestAnimationFrame(() => {
+              rafId = null;
+              renderTree();
+            });
+          }
         };
         const onUp = () => {
           g.releasePointerCapture?.(ev.pointerId);
           window.removeEventListener('pointermove', onMove);
           window.removeEventListener('pointerup', onUp);
-          const finalDx = Number(g.dataset.pendingDx || prev) || 0;
-          if (finalDx === 0) delete state.posOverrides[n.id];
-          else state.posOverrides[n.id] = { dx: finalDx };
+          if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
           savePosOverrides();
           renderTree();
         };
