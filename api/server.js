@@ -412,16 +412,22 @@ app.post('/api/edges', requireEditor, (req, res) => {
   if (!a || !b) return res.status(400).json({ error: 'unknown person id' });
 
   // dedupe: for parent, (from,to) directed; for spouse, treat as unordered.
-  let dup;
+  // Check for ACTIVE duplicate first (block), then SOFT-DELETED (resurrect).
+  let activeDup, softDup;
   if (type === 'parent') {
-    dup = db.prepare('SELECT id FROM edges WHERE from_id=? AND to_id=? AND type=?')
+    activeDup = db.prepare('SELECT id FROM edges WHERE from_id=? AND to_id=? AND type=? AND deleted_at IS NULL')
+      .get(from_id, to_id, 'parent');
+    softDup = db.prepare('SELECT id FROM edges WHERE from_id=? AND to_id=? AND type=? AND deleted_at IS NOT NULL')
       .get(from_id, to_id, 'parent');
   } else {
-    dup = db.prepare(`SELECT id FROM edges WHERE type='spouse' AND
+    activeDup = db.prepare(`SELECT id FROM edges WHERE type='spouse' AND deleted_at IS NULL AND
+      ((from_id=? AND to_id=?) OR (from_id=? AND to_id=?))`)
+      .get(from_id, to_id, to_id, from_id);
+    softDup = db.prepare(`SELECT id FROM edges WHERE type='spouse' AND deleted_at IS NOT NULL AND
       ((from_id=? AND to_id=?) OR (from_id=? AND to_id=?))`)
       .get(from_id, to_id, to_id, from_id);
   }
-  if (dup) return res.status(409).json({ error: 'edge exists', id: dup.id });
+  if (activeDup) return res.status(409).json({ error: 'edge exists', id: activeDup.id });
 
   let edgeStatus = null;
   if (type === 'spouse') {
@@ -430,6 +436,16 @@ app.post('/api/edges', requireEditor, (req, res) => {
       return res.status(400).json({ error: `status must be one of ${[...VALID_SPOUSE_STATUS].join(', ')}` });
     }
     edgeStatus = s;
+  }
+
+  // Resurrect soft-deleted edge instead of inserting a new row (keeps history,
+  // avoids unique-constraint collisions if there is one).
+  if (softDup) {
+    db.prepare(`UPDATE edges SET deleted_at=NULL, deleted_by=NULL,
+        since=?, until=?, status=? WHERE id=?`)
+      .run(since || null, until || null, edgeStatus, softDup.id);
+    logAudit(req.auth.role, 'edge.restore', `${type} ${from_id}->${to_id}`);
+    return res.status(201).json(db.prepare('SELECT * FROM edges WHERE id=?').get(softDup.id));
   }
 
   const id = newId();
