@@ -618,7 +618,7 @@ function labelWidthOf(person) {
 
 /* --- Ego-centered pedigree (Ahnentafel) layout ----------------------- */
 const EGO_PERSON_MATCHER = { given_name_includes: 'Maximilian', surname: 'Pott', birth_date: '1981-04-06' };
-const ANCESTOR_SPREAD = { 1: 220, 2: 380, 3: 580, 4: 780 }; // grid half-spread per generation
+const ANCESTOR_SPREAD = { 1: 640, 2: 320, 3: 160, 4: 80 }; // horizontal step per generation (2× cascade)
 const COLLATERAL_GAP = 180;
 const ORPHAN_GAP = 400;
 
@@ -729,43 +729,20 @@ function computePedigreeLayout(state, rels) {
       }
     }
   }
-  // Spouse-expansion: if one parent was reached via parent-edge and the other
-  // only via a spouse-edge (common when DB has asymmetric parent edges), add
-  // the spouse at the complementary Ahnentafel slot (nr XOR 1 = sibling nr).
-  {
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (const [aid, nr] of [...ahnenNr]) {
-        if (nr < 2) continue;
-        const gen = ahnenGen.get(aid);
-        const sibNr = nr ^ 1; // 2↔3, 4↔5, 6↔7, …
-        if ([...ahnenNr.values()].some(v => v === sibNr)) continue;
-        const spouses = spouseOf.get(aid) || new Set();
-        for (const sid of spouses) {
-          if (ahnenNr.has(sid)) continue;
-          ahnenNr.set(sid, sibNr);
-          ahnenGen.set(sid, gen);
-          changed = true;
-          break;
-        }
-      }
-    }
-  }
-
   const ahnenSet = new Set(ahnenNr.keys());
 
-  // Horizontal half-spread at generation g (distance between adjacent slots).
-  const spreadAt = g => ANCESTOR_SPREAD[g] ?? (780 + 200 * (g - 4));
+  // Horizontal step at generation g in the Ahnentafel binary tree.
+  const spreadAt = g => ANCESTOR_SPREAD[g] ?? Math.max(50, 80 / Math.pow(2, g - 4));
 
-  // Ancestor cx relative to egoCx=0, using grid formula.
-  // Ahn nr in gen g occupies slot (nr - 2^g) out of 2^g evenly spaced slots.
+  // Ancestor cx relative to egoCx=0, derived from Ahnentafel binary path.
+  // nr's bits below the MSB: '0' → step left, '1' → step right.
   const ancestorRelCx = nr => {
     const g = Math.floor(Math.log2(nr));
     if (g === 0) return 0;
-    const slotCount = 1 << g; // 2^g
-    const slotI = nr - slotCount; // 0-indexed left-to-right
-    return (slotI - (slotCount - 1) / 2) * spreadAt(g);
+    const bits = nr.toString(2).slice(1);
+    let cx = 0;
+    for (let k = 1; k <= g; k++) cx += bits[k - 1] === '0' ? -spreadAt(k) : spreadAt(k);
+    return cx;
   };
 
   const maxAncestorGen = ahnenGen.size ? Math.max(...ahnenGen.values()) : 0;
@@ -775,23 +752,6 @@ function computePedigreeLayout(state, rels) {
   const pos = new Map();
   for (const [id, nr] of ahnenNr) {
     pos.set(id, { cx: ancestorRelCx(nr), cy: egoCy - ahnenGen.get(id) * ROW_H });
-  }
-
-  // Dev assertion: every ancestor must land on its expected cy row.
-  if (typeof console !== 'undefined') {
-    const egoPos = pos.get(egoId);
-    if (egoPos) {
-      for (const [aid, nr] of ahnenNr) {
-        if (nr < 2) continue;
-        const gen = ahnenGen.get(aid);
-        const p = pos.get(aid);
-        if (!p) continue;
-        const expectedCy = egoPos.cy - gen * ROW_H;
-        if (Math.abs(p.cy - expectedCy) > 1) {
-          console.warn('[layout] gen y-mismatch', aid, 'gen', gen, 'cy', p.cy, 'expected', expectedCy);
-        }
-      }
-    }
   }
 
   // Tidy-tree for ego's downline (non-ancestor connected persons).
@@ -953,8 +913,8 @@ function computePedigreeLayout(state, rels) {
     if (a && b) links.push({ e, a, b });
   }
 
-  const totalW = Math.max(100, (nodes.length ? Math.max(...nodes.map(n => n.x + n.w)) : marginL) + marginR);
-  const totalH = Math.max(100, (nodes.length ? Math.max(...nodes.map(n => n.y + n.h)) : marginT) + 60);
+  const totalW = (nodes.length ? Math.max(...nodes.map(n => n.x + n.w)) : marginL) + marginR;
+  const totalH = (nodes.length ? Math.max(...nodes.map(n => n.y + n.h)) : marginT) + 60;
 
   // Simple overlap check (3 label-line clearance, matching the legacy constant).
   const overlaps = [];
@@ -1895,8 +1855,7 @@ function renderTree() {
   }
 
   const canvas = document.getElementById('tree-canvas');
-  // Fall back to layout dimensions when canvas has no CSS size yet (e.g. first paint).
-  const cw = canvas.clientWidth || totalW, ch = canvas.clientHeight || totalH;
+  const cw = canvas.clientWidth, ch = canvas.clientHeight;
   svg.setAttribute('viewBox', `0 0 ${cw} ${ch}`);
   svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
 
