@@ -39,7 +39,9 @@ export function missingBackendInfo() {
 
 // Rate limit: 1 req/s on Brave free tier
 const NEXT_ALLOWED = { brave: 0, serper: 0, googlecse: 0, firecrawl: 0 };
-const INTERVAL_MS = { brave: 1100, serper: 500, googlecse: 400, firecrawl: 250 };
+// Firecrawl self-hosted schluckt im parallelen Fanout bereits ab der ~3. Query
+// still & leise und returned 200 mit leerem data: []. Deshalb konservativ.
+const INTERVAL_MS = { brave: 1100, serper: 500, googlecse: 400, firecrawl: 1500 };
 
 async function waitRateLimit(backend) {
   const now = Date.now();
@@ -204,19 +206,28 @@ async function firecrawlSearch(q, { limit }) {
     // Firecrawl's /v1/search backend chokes on double-quotes in the query
     // (HTTP 500). Strip them — Firecrawl handles phrase matching internally.
     const sanitised = q.replace(/["]/g, '').trim();
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      signal: ctrl.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(key ? { 'Authorization': `Bearer ${key}` } : {}),
-        'User-Agent': UA,
-      },
-      body: JSON.stringify({ query: sanitised, limit: Math.min(limit, 20) }),
-    });
-    if (!res.ok) throw new Error(`Firecrawl HTTP ${res.status}`);
-    const payload = await res.json();
-    const results = payload?.data || payload?.results || [];
+    async function callOnce() {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        signal: ctrl.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(key ? { 'Authorization': `Bearer ${key}` } : {}),
+          'User-Agent': UA,
+        },
+        body: JSON.stringify({ query: sanitised, limit: Math.min(limit, 20) }),
+      });
+      if (!res.ok) throw new Error(`Firecrawl HTTP ${res.status}`);
+      const payload = await res.json();
+      return payload?.data || payload?.results || [];
+    }
+    let results = await callOnce();
+    // Retry once nach Pause bei stillem Leer-Response (Firecrawl droppt bei
+    // Rate-Spitze still und liefert 200 + leeres data: []).
+    if (!results.length) {
+      await new Promise(r => setTimeout(r, 1200));
+      try { results = await callOnce(); } catch { /* ignore */ }
+    }
     return results.map(r => ({
       title: r.title || r.name || '',
       url: r.url || r.link || '',
