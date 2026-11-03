@@ -1815,11 +1815,16 @@ function renderTree() {
     const barY = Math.round(Math.max(floorY, Math.min(ceilY, floorY + 10)));
 
     // Drop from parent-midpoint down to barY (pixel-aligned).
+    // Startet UNTER dem Namen-Block damit die vertikale Linie nicht durch
+    // das Parent-eigene Namen-/Datum-Label laeuft.
     const px = Math.round(parentCx);
-    const drop = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    drop.setAttribute('d', `M${px},${parentY + 2} V${barY}`);
-    drop.setAttribute('class', 'edge-parent');
-    edgeG.appendChild(drop);
+    const dropStartY = parentY + PARENT_LABEL_H;
+    if (barY > dropStartY) {
+      const drop = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      drop.setAttribute('d', `M${px},${dropStartY} V${barY}`);
+      drop.setAttribute('class', 'edge-parent');
+      edgeG.appendChild(drop);
+    }
 
     // Horizontal sibling bar
     const minCx = Math.round(Math.min(px, ...kidsNodes.map(k => k.cx)));
