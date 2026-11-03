@@ -340,11 +340,15 @@ app.patch('/api/persons/:id', requireEditor, (req, res) => {
 function autoDismissPendingHitsOnNameMismatch(personId) {
   const p = db.prepare('SELECT given_name, surname, birth_name FROM persons WHERE id=?').get(personId);
   if (!p) return 0;
-  const names = [p.surname, p.birth_name, p.given_name].filter(x => x && x.length >= 3);
-  if (!names.length) return 0;
+  // Nachname + Geburtsname sind die Identitäts-Anker. Vorname zählt NICHT —
+  // Vornamen (Michael, Peter, Hans) kommen in zu vielen irrelevanten Quellen
+  // vor. Ein Treffer gilt nur als Namens-Match wenn surname ODER birth_name
+  // als Teilstring im Text steht.
+  const surnames = [p.surname, p.birth_name].filter(x => x && x.length >= 3);
+  if (!surnames.length) return 0;
   const norm = s => (s || '').toLowerCase()
     .replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss');
-  const nameTokens = names.map(norm);
+  const surnameTokens = surnames.map(norm);
   const pending = db.prepare(`SELECT id, title, snippet FROM research_hits
     WHERE person_id=? AND status='pending' AND source != 'manual_url'`).all(personId);
   const upd = db.prepare(`UPDATE research_hits SET status='dismissed' WHERE id=?`);
@@ -352,7 +356,7 @@ function autoDismissPendingHitsOnNameMismatch(personId) {
   const tx = db.transaction(() => {
     for (const h of pending) {
       const blob = norm((h.title || '') + ' ' + (h.snippet || ''));
-      const matches = nameTokens.some(t => blob.includes(t));
+      const matches = surnameTokens.some(t => blob.includes(t));
       if (!matches) { upd.run(h.id); n += 1; }
     }
   });
