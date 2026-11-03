@@ -1055,6 +1055,81 @@ function computeLayout() {
   // Orphan anchors not reached by root walk:
   for (const a of isAnchor) if (!subtreeWidth.has(a)) computeSubtreeWidth(a);
 
+  // --- Barycentric root reordering -----------------------------------
+  // Grundregel: minimize edge length per level. Cross-tree arcs (parent or
+  // spouse edges connecting different root subtrees) stretch across the
+  // canvas when roots sit in arbitrary birth-year order. Reorder roots so
+  // linked roots end up adjacent — same iterative barycenter pass that
+  // Sugiyama layouts use for layer crossing reduction.
+  function collectSubtreeIds(root) {
+    const out = new Set();
+    const stack = [root];
+    while (stack.length) {
+      const a = stack.pop();
+      if (out.has(a)) continue;
+      out.add(a);
+      const slot = slotByAnchor.get(a);
+      if (slot) {
+        for (const s of (slot.leftSats || [])) out.add(s);
+        for (const s of (slot.rightSats || [])) out.add(s);
+      }
+      const kids = childSlotsOfAnchor.get(a) || [];
+      for (const k of kids) stack.push(k);
+    }
+    return out;
+  }
+  if (rootAnchors.length > 1) {
+    const rootOfNode = new Map();
+    for (const r of rootAnchors) {
+      for (const n of collectSubtreeIds(r)) rootOfNode.set(n, r);
+    }
+    // Build weighted root-link graph: each cross-tree edge adds a link.
+    const rootLinks = new Map();
+    for (const r of rootAnchors) rootLinks.set(r, new Map());
+    const addLink = (r1, r2) => {
+      if (!r1 || !r2 || r1 === r2) return;
+      rootLinks.get(r1).set(r2, (rootLinks.get(r1).get(r2) || 0) + 1);
+      rootLinks.get(r2).set(r1, (rootLinks.get(r2).get(r1) || 0) + 1);
+    };
+    for (const e of state.edges) {
+      if (e.type !== 'parent' && e.type !== 'spouse') continue;
+      addLink(rootOfNode.get(e.from_id), rootOfNode.get(e.to_id));
+    }
+    // Also consider implied spouse edges we synthesized earlier.
+    for (const [key, edge] of spouseEdges) {
+      if (!edge._implied) continue;
+      addLink(rootOfNode.get(edge.from_id), rootOfNode.get(edge.to_id));
+    }
+    // Iterative barycenter sort; birth year as tiebreak.
+    const byear = (r) => year(personById.get(r)?.birth_date) || '9999';
+    for (let iter = 0; iter < 8; iter++) {
+      const idx = new Map(rootAnchors.map((r, i) => [r, i]));
+      const bary = new Map();
+      for (const r of rootAnchors) {
+        const linked = rootLinks.get(r);
+        if (!linked.size) { bary.set(r, idx.get(r)); continue; }
+        let sum = 0, wsum = 0;
+        for (const [other, w] of linked) {
+          sum += idx.get(other) * w;
+          wsum += w;
+        }
+        bary.set(r, sum / wsum);
+      }
+      const newOrder = [...rootAnchors].sort((a, b) => {
+        const d = bary.get(a) - bary.get(b);
+        if (Math.abs(d) > 1e-9) return d;
+        return byear(a).localeCompare(byear(b));
+      });
+      let changed = false;
+      for (let i = 0; i < newOrder.length; i++) {
+        if (newOrder[i] !== rootAnchors[i]) { changed = true; break; }
+      }
+      if (!changed) break;
+      rootAnchors.length = 0;
+      rootAnchors.push(...newOrder);
+    }
+  }
+
   // --- place slots top-down -------------------------------------------
   // Each slot has: anchorX, satelliteXs (one per satellite), y
   const slotPos = new Map();   // anchorId -> {anchorCx, satCx: Map<satId, cx>, y, slotLeftX, width}
