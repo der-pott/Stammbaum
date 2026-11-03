@@ -1367,21 +1367,33 @@ function computeLayout() {
     const halfW_t = (widthOf(t.uc.anchorId) + widthOf(t.uc.satId) + MARRIAGE_GAP) / 2;
     let cx = t.idealCx;
     if (hasOverlap(cx, t.y, halfW_t)) {
-      // Try a lateral shift within one couple-width. More aggressive shifts
-      // (moving neighboring subtrees out of the way) introduced new overlaps
-      // because sibling slots in the same row can't be moved independently
-      // without re-layouting their own couple/children spacing.
+      // Lateral shift along the row to find the nearest free position.
+      // Nearest beats "within halfW_t*2" because the alternative is orphan
+      // placement at far-right (dist = several thousand px), which forces
+      // the parent-arc to span the whole canvas. T-drop bends to child.cx
+      // either way, so a 1500px shift is cosmetic but preserves the "min
+      // line length" principle.
       const ranges = occupiedRanges(t.y);
       let best = null;
+      // Candidates: just outside every occupied range + a hard-left and
+      // hard-right of the row.
+      const cands = [];
       for (const r of ranges) {
-        for (const cand of [r.left - halfW_t, r.right + halfW_t]) {
-          if (!hasOverlap(cand, t.y, halfW_t)) {
-            const dist = Math.abs(cand - t.idealCx);
-            if (best === null || dist < best.dist) best = { cx: cand, dist };
-          }
+        cands.push(r.left - halfW_t);
+        cands.push(r.right + halfW_t);
+      }
+      // Also consider positions far outside existing ranges.
+      if (ranges.length) {
+        cands.push(ranges[0].left - halfW_t - FAMILY_GAP);
+        cands.push(ranges[ranges.length - 1].right + halfW_t + FAMILY_GAP);
+      }
+      for (const cand of cands) {
+        if (!hasOverlap(cand, t.y, halfW_t)) {
+          const dist = Math.abs(cand - t.idealCx);
+          if (best === null || dist < best.dist) best = { cx: cand, dist };
         }
       }
-      if (!best || best.dist > halfW_t * 2) {
+      if (!best) {
         skippedUpstream.add(t.childId);
         continue;
       }
