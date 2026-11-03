@@ -11,7 +11,8 @@ import {
 import { createAnthropicClient, runResearch } from './research.js';
 import { generateBiography } from './biography.js';
 import { runReview, hashContext, suggestionHash, suggestionSummary } from './ai_review.js';
-import { listSources, runSingleSource, SOURCES } from './research_dispatch.js';
+import { runAiResearch, hashResearchContext } from './ai_research.js';
+import { listSources, runSingleSource, SOURCES, dispatchResearch } from './research_dispatch.js';
 import { startWorker, enqueueJob, getJob } from './scrape_worker.js';
 import { computeConsensus } from './consensus.js';
 import { createRateLimiter } from './ratelimit.js';
@@ -32,6 +33,7 @@ startWorker();
 
 const anthropic = createAnthropicClient();
 const aiLimiter = createRateLimiter({ limit: 10, windowMs: 60_000 });
+const aiResearchLimiter = createRateLimiter({ limit: 3, windowMs: 300_000 });
 const loginLimiter = createRateLimiter({ limit: 5, windowMs: 60_000 });
 
 const COOKIE_NAME = 'sb_session';
@@ -1049,16 +1051,50 @@ app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
 
   // Hilfs-Insert für ai_review_items. Idempotent via PRIMARY KEY (review_id,category,idx).
   const insertItem = db.prepare(`INSERT OR REPLACE INTO ai_review_items
-    (review_id, category, idx, suggestion_hash, status, resolved_entity_id, summary, applied_at)
-    VALUES (?,?,?,?,?,?,?,?)`);
-  const recordItem = (category, idx, suggestion, status, resolvedId = null) => {
+    (review_id, category, idx, suggestion_hash, status, resolved_entity_id, summary, applied_at,
+     source_url, source_quote, conflicts_field, conflicts_value)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`);
+  const recordItem = (category, idx, suggestion, status, resolvedId = null, meta = {}) => {
     try {
-      insertItem.run(row.id, category, idx, suggestionHash(category, suggestion), status, resolvedId, suggestionSummary(category, suggestion), now);
+      insertItem.run(
+        row.id, category, idx, suggestionHash(category, suggestion), status,
+        resolvedId, suggestionSummary(category, suggestion), now,
+        meta.source_url || suggestion.source_url || null,
+        meta.source_quote || suggestion.source_quote || null,
+        suggestion.conflicts_field || null,
+        suggestion.conflicts_value || null,
+      );
     } catch (e) {
       // non-fatal, continue
       console.error('ai_review_items write failed:', e.message);
     }
   };
+
+  // Helper: append a source note line to an entity's notes field. Idempotent via URL check.
+  const appendSourceNote = (table, id, sourceUrl, sourceQuote) => {
+    if (!sourceUrl) return;
+    const current = db.prepare(`SELECT notes FROM ${table} WHERE id=?`).get(id);
+    if (!current) return;
+    if (current.notes && current.notes.includes(sourceUrl)) return;
+    const quote = sourceQuote ? sourceQuote.slice(0, 160) + (sourceQuote.length > 160 ? '…' : '') : null;
+    const line = `Quelle KI-Recherche: ${sourceUrl}${quote ? ` — "${quote}"` : ''}`;
+    const newNotes = current.notes ? current.notes + '\n' + line : line;
+    db.prepare(`UPDATE ${table} SET notes=? WHERE id=?`).run(newNotes, id);
+  };
+
+  // Helper: append source note to person's notes.
+  const appendSourceNoteToPersonNotes = (personNoteId, sourceUrl, sourceQuote) => {
+    if (!sourceUrl) return;
+    const current = db.prepare('SELECT notes FROM persons WHERE id=?').get(personNoteId);
+    if (!current) return;
+    if (current.notes && current.notes.includes(sourceUrl)) return;
+    const quote = sourceQuote ? sourceQuote.slice(0, 160) + (sourceQuote.length > 160 ? '…' : '') : null;
+    const line = `Quelle KI-Recherche: ${sourceUrl}${quote ? ` — "${quote}"` : ''}`;
+    const newNotes = current.notes ? current.notes + '\n' + line : line;
+    db.prepare('UPDATE persons SET notes=?, updated_at=? WHERE id=?').run(newNotes, now, personNoteId);
+  };
+
+  const staleItems = [];
 
   const tx = db.transaction(() => {
     // 1) new_persons mit Dedup via (given_name, surname, optional birth_date)
@@ -1090,6 +1126,7 @@ app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
                p.notes || null, now, now);
         newPersonIds.set(idx, id);
         recordItem('new_persons', idx, p, 'applied', id);
+        if (p.source_url) appendSourceNote('persons', id, p.source_url, p.source_quote);
         logAudit(req.auth.role, 'ai_review.apply.person', `${row.id} new=${id}`);
         applied++;
       } catch (e) {
@@ -1212,6 +1249,7 @@ app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
                r.postal_code || null, r.postal_code_historical || null, r.region || null, r.country || 'Deutschland',
                r.start_date || null, r.end_date || null, r.kind || null, r.notes || null, now);
         recordItem('new_residences', idx, r, 'applied', id);
+        if (r.source_url) appendSourceNote('residences', id, r.source_url, r.source_quote);
         applied++;
       } catch (e) {
         errors.push({ bucket: 'new_residences', idx, error: e.message });
@@ -1245,8 +1283,14 @@ app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
       const vals = fields.map(f => u.patch[f]);
       try {
         const r = db.prepare(`UPDATE residences SET ${setStr} WHERE id=? AND person_id=?`).run(...vals, u.entry_id, personId);
-        if (r.changes) { applied++; recordItem('residence_updates', idx, u, 'applied', u.entry_id); }
-        else { errors.push({ bucket: 'residence_updates', idx, error: 'row not updated' }); recordItem('residence_updates', idx, u, 'failed'); }
+        if (r.changes) {
+          applied++;
+          recordItem('residence_updates', idx, u, 'applied', u.entry_id);
+          if (u.source_url) appendSourceNoteToPersonNotes(personId, u.source_url, u.source_quote);
+        } else {
+          errors.push({ bucket: 'residence_updates', idx, error: 'row not updated' });
+          recordItem('residence_updates', idx, u, 'failed');
+        }
       } catch (e) {
         errors.push({ bucket: 'residence_updates', idx, error: e.message });
         recordItem('residence_updates', idx, u, 'failed');
@@ -1277,8 +1321,14 @@ app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
       const vals = fields.map(f => u.patch[f]);
       try {
         const r = db.prepare(`UPDATE jobs SET ${setStr} WHERE id=? AND person_id=?`).run(...vals, u.entry_id, personId);
-        if (r.changes) { applied++; recordItem('job_updates', idx, u, 'applied', u.entry_id); }
-        else { errors.push({ bucket: 'job_updates', idx, error: 'row not updated' }); recordItem('job_updates', idx, u, 'failed'); }
+        if (r.changes) {
+          applied++;
+          recordItem('job_updates', idx, u, 'applied', u.entry_id);
+          if (u.source_url) appendSourceNoteToPersonNotes(personId, u.source_url, u.source_quote);
+        } else {
+          errors.push({ bucket: 'job_updates', idx, error: 'row not updated' });
+          recordItem('job_updates', idx, u, 'failed');
+        }
       } catch (e) {
         errors.push({ bucket: 'job_updates', idx, error: e.message });
         recordItem('job_updates', idx, u, 'failed');
@@ -1309,6 +1359,7 @@ app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
           VALUES (?,?,?,?,?,?,?,?,?)`)
           .run(id, personId, j.title || null, j.employer || null, j.start_date || null, j.end_date || null, j.place || null, j.notes || null, now);
         recordItem('new_jobs', idx, j, 'applied', id);
+        if (j.source_url) appendSourceNote('jobs', id, j.source_url, j.source_quote);
         applied++;
       } catch (e) {
         errors.push({ bucket: 'new_jobs', idx, error: e.message });
@@ -1340,6 +1391,7 @@ app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
           VALUES (?,?,?,?,?,?,?,?,?,?)`)
           .run(id, personId, e.institution || null, e.field || null, e.degree || null, e.place || null, e.start_date || null, e.end_date || null, e.notes || null, now);
         recordItem('new_education', idx, e, 'applied', id);
+        if (e.source_url) appendSourceNote('education', id, e.source_url, e.source_quote);
         applied++;
       } catch (err) {
         errors.push({ bucket: 'new_education', idx, error: err.message });
@@ -1391,6 +1443,19 @@ app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
         recordItem('field_updates', idx, u, 'failed');
         continue;
       }
+      // Stale check: conflicts_field/conflicts_value are stored in suggestion JSON (research reviews).
+      // NULL-safe: for old review rows these fields will simply be absent.
+      if (u.conflicts_field) {
+        const allowed_cf = ['given_name','surname','birth_name','nicknames','title','gender','birth_date','birth_place','death_date','death_place','notes'];
+        if (allowed_cf.includes(u.conflicts_field)) {
+          const currentConflictRow = db.prepare(`SELECT ${u.conflicts_field} AS val FROM persons WHERE id=?`).get(personId);
+          if (currentConflictRow && String(currentConflictRow.val || '') !== String(u.conflicts_value || '')) {
+            staleItems.push({ category: 'field_updates', idx, reason: `${u.conflicts_field} changed since research` });
+            recordItem('field_updates', idx, u, 'skipped_duplicate');
+            continue;
+          }
+        }
+      }
       // Race-Condition: current im Vorschlag muss der aktuelle DB-Wert sein (sonst skip)
       if (u.current !== undefined && u.current !== null && String(row2.val || '') !== String(u.current)) {
         skipped.push({ bucket: 'field_updates', idx, reason: 'current value changed since review' });
@@ -1407,6 +1472,7 @@ app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
         db.prepare(`UPDATE persons SET ${u.field}=?, updated_at=? WHERE id=?`).run(u.suggested, now, personId);
         applied++;
         recordItem('field_updates', idx, u, 'applied', personId);
+        if (u.source_url) appendSourceNoteToPersonNotes(personId, u.source_url, u.source_quote);
       } catch (e) {
         errors.push({ bucket: 'field_updates', idx, error: e.message });
         recordItem('field_updates', idx, u, 'failed');
@@ -1426,7 +1492,122 @@ app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
     : (errors.length ? 'partially_applied' : 'done');
   db.prepare(`UPDATE ai_reviews SET status=?, applied_at=? WHERE id=?`).run(newStatus, now, row.id);
   logAudit(req.auth.role, 'ai_review.apply', `${row.id} applied=${applied} skipped=${skipped.length} errors=${errors.length}`);
-  res.json({ review_id: row.id, applied, skipped, requested: total, errors, status: newStatus });
+  res.json({ review_id: row.id, applied, skipped, stale: staleItems, requested: total, errors, status: newStatus });
+});
+
+/* KI-Vollrecherche -------------------------------------------------------- */
+
+app.post('/api/persons/:id/ai-research', requireEditor, aiResearchLimiter, async (req, res) => {
+  if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY nicht gesetzt' });
+
+  const person = db.prepare('SELECT * FROM persons WHERE id=?').get(req.params.id);
+  if (!person) return res.status(404).json({ error: 'person not found' });
+
+  const currentYear = new Date().getFullYear();
+  const birth_year = person.birth_date ? parseInt(person.birth_date, 10) || null : null;
+  const death_year = person.death_date ? parseInt(person.death_date, 10) || null : null;
+
+  let yearSpan = req.body?.year_span || null;
+  if (!yearSpan && birth_year == null && death_year == null) {
+    return res.status(400).json({ error: 'missing_lifedates' });
+  }
+  if (yearSpan) {
+    const from = parseInt(yearSpan.from, 10);
+    const to = parseInt(yearSpan.to, 10);
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from >= to ||
+        from < 1700 || from > currentYear || to < 1700 || to > currentYear) {
+      return res.status(400).json({ error: 'invalid_year_span' });
+    }
+    yearSpan = { from, to };
+  }
+
+  const bioContext = gatherBioContext(req.params.id);
+  if (!bioContext) return res.status(404).json({ error: 'person not found' });
+
+  const nameRegister = db.prepare(`SELECT id, given_name, surname, birth_name, birth_date
+    FROM persons WHERE id != ? ORDER BY surname, given_name`).all(req.params.id);
+
+  // Compute gaps: list of null/empty core fields
+  const gaps = [];
+  if (!birth_year) gaps.push('birth_year');
+  if (!death_year) gaps.push('death_year');
+  if (!person.birth_place) gaps.push('birth_place');
+  if (!person.death_place) gaps.push('death_place');
+  if (!(bioContext.parents || []).length) gaps.push('parents');
+  if (!(bioContext.residences || []).length) gaps.push('residences');
+  if (!(bioContext.jobs || []).length) gaps.push('jobs');
+  if (!person.notes || !person.notes.trim()) gaps.push('notes');
+
+  try {
+    // Dispatch research to get hits (dispatchResearch is statically imported at top)
+    const sourceKeys = Array.isArray(req.body?.source_keys) && req.body.source_keys.length
+      ? req.body.source_keys
+      : undefined;
+    const useCache = req.body?.use_cache !== false;
+    const { hits } = await dispatchResearch(person, { sourceKeys, useCache, onStatus: () => {} });
+
+    const hitDigests = hits.map(h => h.url || h.title || '').filter(Boolean);
+    const contextHash = hashResearchContext(person, hitDigests, yearSpan);
+
+    // Return cached research if same context and < 7 days old
+    const CACHE_TTL_MS = 7 * 24 * 3600_000;
+    const existingResearch = db.prepare(`SELECT * FROM ai_reviews
+      WHERE person_id=? AND context_hash=? AND kind='research'
+      ORDER BY created_at DESC LIMIT 1`).get(req.params.id, contextHash);
+    if (existingResearch) {
+      const age = Date.now() - new Date(existingResearch.created_at).getTime();
+      if (age < CACHE_TTL_MS) {
+        let suggestions;
+        try { suggestions = JSON.parse(existingResearch.suggestions); } catch { suggestions = null; }
+        if (suggestions) {
+          logAudit(req.auth.role, 'ai_research.cached', req.params.id);
+          return res.json({
+            review_id: existingResearch.id,
+            person_id: req.params.id,
+            suggestions,
+            model: existingResearch.model,
+            created_at: existingResearch.created_at,
+            cached: true,
+            sources_summary: null,
+          });
+        }
+      }
+    }
+
+    const budget = req.body?.budget || { max_llm_calls: 1, max_fetches: 0 };
+    const result = await runAiResearch(anthropic, person, bioContext, nameRegister, hits, {
+      yearSpan,
+      gaps,
+      budget,
+    });
+
+    const now = nowIso();
+    const reviewId = newId();
+    db.prepare(`INSERT INTO ai_reviews (id, person_id, suggestions, status, model, context_hash, created_at, kind)
+      VALUES (?,?,?,?,?,?,?,?)`)
+      .run(reviewId, req.params.id, JSON.stringify(result.suggestions), 'pending',
+           result.model || 'unknown', contextHash, now, 'research');
+
+    // source_url/source_quote/conflicts_field/conflicts_value are stored in the suggestions JSON.
+    // They are written to ai_review_items during apply via the updated recordItem function.
+
+    logAudit(req.auth.role, 'ai_research.generate', req.params.id);
+    res.json({
+      review_id: reviewId,
+      person_id: req.params.id,
+      suggestions: result.suggestions,
+      model: result.model,
+      created_at: now,
+      sources_summary: result.sources_summary,
+      usage: result.usage,
+      follow_ups_consumed: result.follow_ups_consumed,
+      context_hash: contextHash,
+    });
+  } catch (err) {
+    logAudit(req.auth.role, 'ai_research.fail', req.params.id);
+    console.error('ai-research error:', err?.message, err?.raw ? '— raw:' + err.raw.slice(0, 500) : '');
+    res.status(502).json({ error: err?.message || 'ai-research failed' });
+  }
 });
 
 /* research hits + sources ---------------------------------------------- */

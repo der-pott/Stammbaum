@@ -1763,3 +1763,7 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
 .toast-err { background: var(--err); }
 .toast-ok { background: #27ae60; }
 .toast.fade { opacity: 0; }
+
+#ai-research-dialog, #ai-research-yearspan-dialog { max-width: min(90vw, 640px); max-height: 85dvh; overflow-y: auto; }
+.ai-conflict-badge { background:#fdecea; color:#c33; padding:2px 6px; border-radius:4px; font-size:0.8em; margin-left:6px; }
+.ai-source-badge { font-size:0.85em; margin-left:6px; color:#06c; }

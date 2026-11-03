@@ -239,6 +239,24 @@ if (!reviewCols.has('context_hash')) {
   db.exec('ALTER TABLE ai_reviews ADD COLUMN context_hash TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS idx_reviews_ctxhash ON ai_reviews(person_id, context_hash)');
 }
+if (!reviewCols.has('kind')) {
+  db.exec("ALTER TABLE ai_reviews ADD COLUMN kind TEXT NOT NULL DEFAULT 'review'");
+}
+
+// ai_review_items: provenance columns for KI-Vollrecherche.
+const reviewItemCols = new Set(db.prepare('PRAGMA table_info(ai_review_items)').all().map(c => c.name));
+if (!reviewItemCols.has('source_url')) {
+  db.exec('ALTER TABLE ai_review_items ADD COLUMN source_url TEXT');
+}
+if (!reviewItemCols.has('source_quote')) {
+  db.exec('ALTER TABLE ai_review_items ADD COLUMN source_quote TEXT');
+}
+if (!reviewItemCols.has('conflicts_field')) {
+  db.exec('ALTER TABLE ai_review_items ADD COLUMN conflicts_field TEXT');
+}
+if (!reviewItemCols.has('conflicts_value')) {
+  db.exec('ALTER TABLE ai_review_items ADD COLUMN conflicts_value TEXT');
+}
 
 // Idempotente Migration: Spalte in bestehender Tabelle anlegen falls fehlt.
 // SQLite kennt kein ADD COLUMN IF NOT EXISTS; wir prüfen via PRAGMA.
