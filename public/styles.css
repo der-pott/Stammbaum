@@ -1666,6 +1666,22 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
 }
 #btn-focus-lineage.active:hover { background: var(--seal); }
 
+/* --- Edit-Layout Mode (manual drag with grid snap) --- */
+#btn-edit-layout.active { background: var(--seal); color: var(--seal-ink); }
+.tree-canvas.edit-mode {
+  background-image:
+    linear-gradient(to right, rgba(0,0,0,0.06) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0,0,0,0.04) 1px, transparent 1px);
+  background-size: 50px 50px, 50px 50px;
+}
+.tree-canvas.edit-mode .node.draggable { cursor: grab; }
+.tree-canvas.edit-mode .node.draggable.dragging { cursor: grabbing; opacity: 0.85; }
+.tree-canvas.edit-mode .node.draggable .node-ring {
+  stroke: var(--seal);
+  stroke-width: 2;
+  stroke-dasharray: 3 2;
+}
+
 /* ---- Recycle Bin & Plausibility --------------------------------------- */
 .dlg-recycle, .dlg-plausibility { min-width: min(640px, 90vw); max-height: 85vh; overflow-y: auto; }
 .recycle-group, .plausibility-group { margin: 12px 0; }

@@ -138,7 +138,16 @@ const state = {
   layout: null,
   latestRunCache: new Map(),
   focusLineage: localStorage.getItem('sb-focus-lineage') === '1',
+  editMode: false,
+  posOverrides: (() => {
+    try { return JSON.parse(localStorage.getItem('sb-pos-overrides') || '{}') || {}; }
+    catch(e) { return {}; }
+  })(),
 };
+const GRID_X = 50;  // horizontal snap grid for manual layout tweaks
+function savePosOverrides() {
+  try { localStorage.setItem('sb-pos-overrides', JSON.stringify(state.posOverrides || {})); } catch(e) {}
+}
 
 // Compute set of person IDs in the lineage of a focus person:
 // ancestors (recursive parents), descendants (recursive children),
@@ -244,6 +253,10 @@ function applyRole() {
   if (st) st.hidden = !loggedIn;
   const canEdit = state.role === 'editor';
   for (const el of document.querySelectorAll('[data-editor]')) el.hidden = !canEdit;
+  const editBtn = document.getElementById('btn-edit-layout');
+  const resetBtn = document.getElementById('btn-reset-layout');
+  if (editBtn) editBtn.hidden = !canEdit;
+  if (resetBtn) resetBtn.hidden = !canEdit;
   if (loggedIn) startAnniversariesPolling();
 }
 
@@ -1669,6 +1682,32 @@ function computeLayout() {
     }
   }
 
+  // --- Manual position overrides (user drag-&-drop) -------------------
+  // state.posOverrides is {personId: {dx}}. Applied AFTER layout so edges
+  // read updated node.cx values. Updates both node AND slotPos entries so
+  // sibling-bars and spouse-arcs follow.
+  if (state.posOverrides && Object.keys(state.posOverrides).length) {
+    for (const [pid, ov] of Object.entries(state.posOverrides)) {
+      const dx = Number(ov?.dx) || 0;
+      if (!dx) continue;
+      const n = posById.get(pid);
+      if (!n) continue;
+      n.x += dx;
+      n.cx += dx;
+      // If anchor, shift slotPos anchorCx + its satellites' cx.
+      if (slotPos.has(pid)) {
+        const sp = slotPos.get(pid);
+        sp.anchorCx += dx;
+        sp.slotLeftX += dx;
+        // (satellites stay put — only this anchor moved)
+      }
+      // If satellite in some anchor's slot, update that slot's satCx entry.
+      for (const [, sp] of slotPos) {
+        if (sp.satCx.has(pid)) sp.satCx.set(pid, sp.satCx.get(pid) + dx);
+      }
+    }
+  }
+
   // Recompute total width from new maxX
   const newMaxX2 = Math.max(...nodes.map(n => n.x + n.w));
   const totalW = Math.max(maxX2, newMaxX2) + marginR;
@@ -2226,15 +2265,51 @@ function renderTree() {
       }
     }
 
-    g.onclick = () => select(n.id);
+    g.onclick = () => { if (!state.editMode) select(n.id); };
     if (window.matchMedia('(hover: hover)').matches) {
-      g.onmouseenter = () => showNodeHover(n);
+      g.onmouseenter = () => { if (!state.editMode) showNodeHover(n); };
       g.onmouseleave = () => hideNodeHover();
     }
     g.setAttribute('tabindex', '0');
     g.setAttribute('role', 'button');
     g.setAttribute('aria-label', `${nmText}${dates ? ' ' + dates : ''}`);
     g.onkeydown = (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); select(n.id); } };
+
+    // Drag-&-drop in edit mode (editor only, horizontal snap).
+    if (state.editMode && state.role === 'editor') {
+      g.classList.add('draggable');
+      g.onpointerdown = (ev) => {
+        if (ev.button !== 0) return;
+        ev.preventDefault(); ev.stopPropagation();
+        const startClientX = ev.clientX;
+        const startX = n.x;
+        const prev = state.posOverrides[n.id]?.dx || 0;
+        const svg = document.getElementById('tree');
+        const canvasRect = svg.getBoundingClientRect();
+        const k = state.pz.k;
+        g.setPointerCapture?.(ev.pointerId);
+        g.classList.add('dragging');
+        const onMove = (mv) => {
+          const dxClient = mv.clientX - startClientX;
+          const dxWorld = dxClient / k;
+          const snapped = Math.round(dxWorld / GRID_X) * GRID_X;
+          g.setAttribute('transform', `translate(${startX + snapped} ${n.y})`);
+          g.dataset.pendingDx = String(prev + snapped);
+        };
+        const onUp = () => {
+          g.releasePointerCapture?.(ev.pointerId);
+          window.removeEventListener('pointermove', onMove);
+          window.removeEventListener('pointerup', onUp);
+          const finalDx = Number(g.dataset.pendingDx || prev) || 0;
+          if (finalDx === 0) delete state.posOverrides[n.id];
+          else state.posOverrides[n.id] = { dx: finalDx };
+          savePosOverrides();
+          renderTree();
+        };
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+      };
+    }
 
     nodeG.appendChild(g);
   }
@@ -2325,6 +2400,24 @@ function setupPanZoom() {
       state.focusLineage = !state.focusLineage;
       localStorage.setItem('sb-focus-lineage', state.focusLineage ? '1' : '0');
       focusBtn.classList.toggle('active', state.focusLineage);
+      renderTree();
+    };
+  }
+  const editBtn = document.getElementById('btn-edit-layout');
+  const resetBtn = document.getElementById('btn-reset-layout');
+  if (editBtn) {
+    editBtn.onclick = () => {
+      state.editMode = !state.editMode;
+      editBtn.classList.toggle('active', state.editMode);
+      document.getElementById('tree-canvas')?.classList.toggle('edit-mode', state.editMode);
+      renderTree();
+    };
+  }
+  if (resetBtn) {
+    resetBtn.onclick = () => {
+      if (!confirm('Alle manuellen Positionen löschen?')) return;
+      state.posOverrides = {};
+      savePosOverrides();
       renderTree();
     };
   }

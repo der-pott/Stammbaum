@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&display=swap">
-  <link rel="stylesheet" href="styles.css?v=44">
+  <link rel="stylesheet" href="styles.css?v=45">
 </head>
 <body>
 
@@ -89,6 +89,8 @@
       <div class="tree-ctrl" role="group" aria-label="Baum-Steuerung">
         <span id="layout-warn" class="layout-warn" hidden></span>
         <button id="btn-focus-lineage" class="icon-btn tiny" aria-label="Direkte Linie fokussieren" title="Direkte Linie (Vorfahren + Nachkommen + Partner) hervorheben">🎯</button>
+        <button id="btn-edit-layout" class="icon-btn tiny" aria-label="Layout bearbeiten" title="Personen manuell verschieben (nur Editor)" hidden>✋</button>
+        <button id="btn-reset-layout" class="icon-btn tiny" aria-label="Layout zurücksetzen" title="Manuelle Positionen löschen" hidden>↺</button>
         <button id="btn-zoom-out" class="icon-btn tiny" aria-label="Verkleinern" title="−">−</button>
         <button id="btn-zoom-fit" class="icon-btn tiny" aria-label="Einpassen" title="Einpassen">◇</button>
         <button id="btn-zoom-in" class="icon-btn tiny" aria-label="Vergrößern" title="+">+</button>
@@ -402,6 +404,6 @@
 
 <div id="toasts" class="toasts" aria-live="polite"></div>
 
-<script src="stammbaum.js?v=88" defer></script>
+<script src="stammbaum.js?v=89" defer></script>
 </body>
 </html>
