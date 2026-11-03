@@ -37,6 +37,24 @@ function roleKeywords(title) {
   return kw;
 }
 
+// Deutsche Universitätsstädte, grob nach Prominenz medizinischer Fakultäten
+// sortiert. Für datenarme Prof. Dr. med.-Personen enumerieren wir diese
+// Städte um Firecrawl die nötige geographische Spezifität zu liefern.
+const UNI_CITIES = [
+  'Berlin', 'München', 'Hamburg', 'Köln', 'Frankfurt', 'Freiburg', 'Heidelberg',
+  'Tübingen', 'Göttingen', 'Hannover', 'Mainz', 'Düsseldorf', 'Bonn', 'Münster',
+  'Leipzig', 'Dresden', 'Jena', 'Halle', 'Rostock', 'Greifswald', 'Kiel',
+  'Lübeck', 'Erlangen', 'Würzburg', 'Marburg', 'Regensburg', 'Ulm',
+  'Essen', 'Bochum', 'Magdeburg',
+];
+
+// Medizinische Fachrichtungen für Prof-Dr-med-Enumeration (zweite Dimension).
+const MED_FIELDS = [
+  'Dermatologie', 'Innere Medizin', 'Chirurgie', 'Kardiologie', 'Pädiatrie',
+  'Gynäkologie', 'Orthopädie', 'Neurologie', 'Psychiatrie', 'Radiologie',
+  'HNO', 'Augenheilkunde', 'Urologie', 'Anästhesie', 'Pathologie',
+];
+
 function buildQueries(person) {
   const { full, firstGiven, surname } = nameParts(person);
   if (!full) return [];
@@ -102,6 +120,45 @@ function buildQueries(person) {
   return Array.from(queries).slice(0, 8);
 }
 
+// Fallback-Query-Enumeration: wird nach dem Standard-Lauf aufgerufen wenn
+// die Person datenarm ist (Prof/Dr-Titel, aber keine jobs/education/
+// residences und keine birth/death-places). Firecrawl findet CPR und
+// vergleichbare Fach-URLs erst wenn Stadt oder Fachrichtung in der Query
+// steht. Mit kleinem Early-Stop: sobald wir N Treffer von universitäts-
+// oder klinik-Hosts haben, brechen wir ab.
+function needsFallbackEnum(person) {
+  const title = (person.title || '').toLowerCase();
+  const hasRole = /prof|dr\.?/.test(title);
+  const dataPoor = !(person.birth_place || person.death_place)
+    && !(person.residences || []).length
+    && !(person.jobs || []).length
+    && !(person.education || []).length
+    && !((person.related_cities || []).length);
+  return hasRole && dataPoor;
+}
+
+function buildFallbackQueries(person, alreadyRun) {
+  const { full, surname, firstGiven } = nameParts(person);
+  const nameTokens = full.split(/\s+/).filter(Boolean);
+  const name = nameTokens.length >= 4 ? `"${firstGiven} ${surname}"` : full;
+  const title = (person.title || '').trim();
+  const isMed = /med/i.test(title);
+  const out = [];
+  // City-Enum: Universität <Stadt> (zuerst — am treffsichersten für Profs)
+  for (const city of UNI_CITIES) {
+    const q = `${name} Universität ${city}`;
+    if (!alreadyRun.has(q)) out.push(q);
+  }
+  // Fach-Enum (nur bei Dr. med.)
+  if (isMed) {
+    for (const field of MED_FIELDS) {
+      const q = `${name} ${field}`;
+      if (!alreadyRun.has(q)) out.push(q);
+    }
+  }
+  return out;
+}
+
 async function runSingleQuery(q) {
   const r = await webSearch({ query: q, country: 'DE', limit: 8 });
   if (!r.ok) return [];
@@ -143,6 +200,34 @@ export async function search(person) {
 
   // Query-Fanout — sequentiell gegen Firecrawl's Rate-Cap
   const perQuery = await runQueriesSequential(queries);
+
+  // Fallback-Enum: wenn Person datenarm und bisher wenig fach-spezifische
+  // Hits (keine .edu / uni-*.de / *-klinik.de Hosts), enumeriere Städte +
+  // Fachrichtungen bis Early-Stop. Löst z.B. den CPR-Rostock-Fall ohne
+  // dass der User vorher Rostock in die Person-Daten eintragen muss.
+  if (needsFallbackEnum(person)) {
+    const seenHosts = new Set();
+    for (const { hits } of perQuery) for (const h of hits) {
+      const host = hostOf(h.url).replace(/^www\./, '');
+      if (host) seenHosts.add(host);
+    }
+    const alreadyRun = new Set(queries);
+    const fallback = buildFallbackQueries(person, alreadyRun);
+    // Early-Stop-Signale: Trefferhost matcht Fach-/Uni-/Klinik-Pattern
+    const QUALITY_HOST = /(uni-[a-z]+\.de|cpr\.|klinik(um)?|charite|aerzte|facharzt|professoren)/i;
+    let qualityHits = 0;
+    const QUALITY_TARGET = 3;    // Early-Stop sobald 3 Fach-Hosts gefunden
+    const MAX_FALLBACK_QUERIES = 25; // Budget-Cap: 25 * 1500ms = 37s
+    let used = 0;
+    for (const q of fallback) {
+      if (used >= MAX_FALLBACK_QUERIES) break;
+      if (qualityHits >= QUALITY_TARGET) break;
+      const hits = await runSingleQuery(q);
+      used += 1;
+      perQuery.push({ q, hits });
+      for (const h of hits) if (QUALITY_HOST.test(h.url || '')) qualityHits += 1;
+    }
+  }
 
   // Hat überhaupt irgendeine Query ein Backend?
   const anyBackend = perQuery.some(({ hits }) => hits.length > 0);

@@ -102,6 +102,9 @@ const api = {
     return j(await fetch(`/api/research/hits/${hit_id}/apply`, postJson({ action })));
   },
   async researchSources() { return j(await fetch('/api/research/sources')); },
+  async researchAddUrl(person_id, url) {
+    return j(await fetch(`/api/persons/${person_id}/research/add-url`, postJson({ url })));
+  },
   async researchConsensus(person_id) {
     return j(await fetch(`/api/persons/${person_id}/research/consensus`));
   },
@@ -2729,6 +2732,7 @@ async function loadResearchHits(personId) {
     if (state.role === 'editor') {
       body.appendChild(h('div', { class: 'ext-head', style: 'margin-top: 16px' },
         btnOutline('🔎 Recherche starten', () => scrapeHits(personId)),
+        btnOutline('🔗 URL hinzufügen', () => addManualUrl(personId)),
       ));
     }
   } catch (e) {
@@ -2821,6 +2825,24 @@ function renderHitsList(parent, hits, personId) {
     for (const hit of group) wrap.appendChild(renderHit(hit, personId));
   }
   parent.appendChild(wrap);
+}
+
+async function addManualUrl(personId) {
+  const url = (prompt('URL einfügen (http[s]://…). Backend scraped die Seite und legt sie als Treffer an. Mit "Bestätigen" wird dann die KI-Analyse der Quelle ausgelöst.') || '').trim();
+  if (!url) return;
+  try {
+    const r = await api.researchAddUrl(personId, url);
+    await loadResearchHits(personId);
+    const msg = `URL eingefügt: "${r.title}" (${r.markdown_length} Zeichen). In der Trefferliste jetzt mit "✓ Bestätigen" die KI-Analyse starten.`;
+    // kleines Flash statt alert
+    const flash = document.createElement('div');
+    flash.className = 'manual-url-flash';
+    flash.textContent = msg;
+    document.body.appendChild(flash);
+    setTimeout(() => flash.remove(), 6000);
+  } catch (e) {
+    alert('URL konnte nicht ergänzt werden: ' + (e.message || e));
+  }
 }
 
 async function scrapeHits(personId) {

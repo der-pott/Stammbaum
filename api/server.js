@@ -16,6 +16,7 @@ import { startWorker, enqueueJob, getJob } from './scrape_worker.js';
 import { computeConsensus } from './consensus.js';
 import { createRateLimiter } from './ratelimit.js';
 import { gedcomToPayload } from './gedcom.js';
+import { fetchPage } from './scrape_fetcher.js';
 import { runPlausibilityChecks } from './plausibility.js';
 import { colognePhonetic } from './phonetic.js';
 import sharp from 'sharp';
@@ -1419,6 +1420,48 @@ app.get('/api/persons/:id/research/hits', requireViewer, (req, res) => {
   const rows = db.prepare(`SELECT * FROM research_hits WHERE person_id=? ORDER BY created_at ASC`)
     .all(req.params.id);
   res.json(rows.map(r => ({ ...r, payload: safeJson(r.payload) })));
+});
+
+// Manuelle URL-Ergänzung: User klebt eine URL rein, Backend scraped sie via
+// Firecrawl, legt sie als research_hit mit source='manual_url' und markdown
+// im payload an. User kann dann wie jeden anderen Treffer bestätigen → löst
+// die Hit-fokussierte KI-Analyse aus.
+app.post('/api/persons/:id/research/add-url', requireEditor, aiLimiter, async (req, res) => {
+  const person = db.prepare('SELECT * FROM persons WHERE id=?').get(req.params.id);
+  if (!person) return res.status(404).json({ error: 'person not found' });
+  const url = String(req.body?.url || '').trim();
+  if (!url || !/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'url (http[s]://…) erforderlich' });
+
+  // Duplicate-Check: existiert hit mit dieser URL schon?
+  const existing = db.prepare('SELECT id, status FROM research_hits WHERE person_id=? AND url=?')
+    .get(req.params.id, url);
+  if (existing) {
+    return res.status(409).json({ error: 'URL schon vorhanden', hit_id: existing.id, status: existing.status });
+  }
+
+  try {
+    const r = await fetchPage('manual_url', url, { timeout: 20_000 });
+    if (!r.ok) return res.status(502).json({ error: 'Scrape fehlgeschlagen', detail: r.error || r.status });
+    const md = (r.markdown || r.text || '').trim();
+    if (md.length < 100) return res.status(502).json({ error: 'Seite liefert zu wenig Inhalt (<100 Zeichen)' });
+
+    // Titel aus Markdown-H1 ziehen, Fallback auf URL
+    const h1Match = md.match(/^#\s+(.{3,200})/m);
+    const title = h1Match ? h1Match[1].trim() : (new URL(url)).host + new URL(url).pathname;
+    const snippet = md.replace(/[#*_`\[\]()!>]/g, ' ').replace(/\s+/g, ' ').slice(0, 240);
+
+    const hitId = newId();
+    db.prepare(`INSERT INTO research_hits
+      (id, person_id, source, url, title, snippet, confidence, payload, status, created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`)
+      .run(hitId, req.params.id, 'manual_url', url, title.slice(0, 200), snippet, 0.9,
+        JSON.stringify({ markdown: md.slice(0, 20_000), manual: true }), 'pending', nowIso());
+    logAudit(req.auth.role, 'research.add_url', req.params.id);
+    res.json({ hit_id: hitId, title, snippet, markdown_length: md.length });
+  } catch (err) {
+    console.error('[add-url] failed:', err?.message);
+    res.status(502).json({ error: err?.message || 'add-url failed' });
+  }
 });
 
 app.post('/api/research/hits/:id/apply', requireEditor, async (req, res) => {
