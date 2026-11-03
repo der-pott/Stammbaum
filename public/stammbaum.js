@@ -1882,6 +1882,12 @@ function renderTree() {
     if (!leftNode || !rightNode || !edge) return;
     const key = edge.from_id < edge.to_id ? `${edge.from_id}|${edge.to_id}` : `${edge.to_id}|${edge.from_id}`;
     drawnCouples.add(key);
+    // Normalize: slot layout may have put sat on one side, but a manual
+    // drag can push the sat past its anchor. Pick whichever is currently
+    // left-of-right so the line and glyph still render.
+    if (leftNode.cx > rightNode.cx) {
+      const tmp = leftNode; leftNode = rightNode; rightNode = tmp;
+    }
     const status = edge.status || 'married';
     const glyph = marriageGlyph(status);
     const y = leftNode.y + AVATAR_R;
