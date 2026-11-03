@@ -1491,6 +1491,7 @@ app.post('/api/research/hits/:id/apply', requireEditor, async (req, res) => {
   }
   let newStatus = action;
   if (action === 'reset') newStatus = 'pending';
+  if (action === 'dismiss') newStatus = 'dismissed';
   if (action === 'add_source_note' && hit.person_id) {
     // append a short line to the person's notes
     const p = db.prepare('SELECT notes FROM persons WHERE id=?').get(hit.person_id);
