@@ -1812,12 +1812,7 @@ function renderTree() {
     // "knapp uebers Kind".
     const floorY = parentY + PARENT_LABEL_H;
     const ceilY = childTopY - CHILD_STUB;
-    const kidsSpan = Math.max(0, Math.max(...kidsNodes.map(k => k.cx)) - Math.min(...kidsNodes.map(k => k.cx)));
-    // Lange Bars (>400px) auf gestaffelte Y legen damit mehrere lange Bars
-    // in derselben Generation sich nicht ueberlappen. Stufung in 8px-Schritten
-    // basierend auf parent-cx damit Nachbarn verschiedene Y bekommen.
-    const stagger = kidsSpan > 400 ? ((parentCx >> 7) % 4) * 8 : 0;
-    const barY = Math.round(Math.max(floorY, Math.min(ceilY - 2, floorY + 10 + stagger)));
+    const barY = Math.round(Math.max(floorY, Math.min(ceilY, floorY + 10)));
 
     // Drop from parent-midpoint down to barY (pixel-aligned).
     // Startet UNTER dem Namen-Block damit die vertikale Linie nicht durch
