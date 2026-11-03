@@ -220,7 +220,7 @@ export async function runReview(anthropic, ctx, register, alreadyProcessed = [])
   const userPrompt = buildUserPrompt(ctx, register, alreadyProcessed);
   const resp = await anthropic.messages.create({
     model: MODEL,
-    max_tokens: 4096,
+    max_tokens: 8192,
     thinking: { type: 'adaptive' },
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: userPrompt }],

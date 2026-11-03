@@ -309,7 +309,7 @@ app.get('/api/persons/:id', requireViewer, (req, res) => {
 });
 
 app.patch('/api/persons/:id', requireEditor, (req, res) => {
-  const existing = db.prepare('SELECT id FROM persons WHERE id=?').get(req.params.id);
+  const existing = db.prepare('SELECT given_name, surname, birth_name FROM persons WHERE id=?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'not found' });
   const data = sanitizePerson(req.body || {});
   if (!Object.keys(data).length) return res.status(400).json({ error: 'no fields' });
@@ -317,7 +317,57 @@ app.patch('/api/persons/:id', requireEditor, (req, res) => {
   db.prepare(`UPDATE persons SET ${set}, updated_at=@updated_at WHERE id=@id`)
     .run({ ...data, id: req.params.id, updated_at: nowIso() });
   logAudit(req.auth.role, 'person.update', req.params.id);
-  res.json(db.prepare('SELECT * FROM persons WHERE id=?').get(req.params.id));
+  // Name-Change-Trigger: Wenn given_name/surname/birth_name geändert wurden,
+  // alle pending research_hits re-scoren und die ohne Namens-Match
+  // automatisch dismissen. Der User hat den Namen explizit korrigiert, also
+  // sind Treffer die den alten Namen enthielten und mit dem neuen Namen
+  // nicht übereinstimmen irrelevant.
+  const nameChanged = ['given_name', 'surname', 'birth_name'].some(
+    k => k in data && (data[k] || '') !== (existing[k] || ''));
+  let autoDismissed = 0;
+  if (nameChanged) {
+    autoDismissed = autoDismissPendingHitsOnNameMismatch(req.params.id);
+    if (autoDismissed) logAudit(req.auth.role, 'research.auto_dismiss_on_rename', req.params.id);
+  }
+  const row = db.prepare('SELECT * FROM persons WHERE id=?').get(req.params.id);
+  res.json({ ...row, _meta: { auto_dismissed_hits: autoDismissed } });
+});
+
+// Pending-Hits beim Namens-Wechsel re-scoren. Match-Kriterium: Nachname
+// (oder Geburtsname) muss im Title ODER Snippet vorkommen (case-insensitive,
+// Umlaut-tolerant). Alte Falschschreibweisen gehen damit raus, aber Treffer
+// die den neuen Namen auch zufällig enthalten bleiben pending.
+function autoDismissPendingHitsOnNameMismatch(personId) {
+  const p = db.prepare('SELECT given_name, surname, birth_name FROM persons WHERE id=?').get(personId);
+  if (!p) return 0;
+  const names = [p.surname, p.birth_name, p.given_name].filter(x => x && x.length >= 3);
+  if (!names.length) return 0;
+  const norm = s => (s || '').toLowerCase()
+    .replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss');
+  const nameTokens = names.map(norm);
+  const pending = db.prepare(`SELECT id, title, snippet FROM research_hits
+    WHERE person_id=? AND status='pending' AND source != 'manual_url'`).all(personId);
+  const upd = db.prepare(`UPDATE research_hits SET status='dismissed' WHERE id=?`);
+  let n = 0;
+  const tx = db.transaction(() => {
+    for (const h of pending) {
+      const blob = norm((h.title || '') + ' ' + (h.snippet || ''));
+      const matches = nameTokens.some(t => blob.includes(t));
+      if (!matches) { upd.run(h.id); n += 1; }
+    }
+  });
+  tx();
+  return n;
+}
+
+// Explicit cleanup endpoint for existing hits: User kann manuell triggern
+// wenn der Name-Change schon länger her ist und alte Hits noch rumliegen.
+app.post('/api/persons/:id/research/cleanup-stale', requireEditor, (req, res) => {
+  const person = db.prepare('SELECT id FROM persons WHERE id=?').get(req.params.id);
+  if (!person) return res.status(404).json({ error: 'person not found' });
+  const n = autoDismissPendingHitsOnNameMismatch(req.params.id);
+  logAudit(req.auth.role, 'research.cleanup_stale', req.params.id);
+  res.json({ auto_dismissed: n });
 });
 
 app.delete('/api/persons/:id', requireEditor, (req, res) => {
@@ -946,6 +996,25 @@ app.post('/api/persons/:id/ai-review', requireEditor, aiLimiter, async (req, res
     console.error('ai-review error:', err?.message, err?.raw ? '— raw:' + err.raw.slice(0, 500) : '');
     res.status(502).json({ error: err?.message || 'ai-review failed' });
   }
+});
+
+// List open/partial reviews for one person. Frontend nutzt das, um nach
+// einem geschlossenen hit-fokussierten Modal die noch offenen Vorschläge
+// wiederzufinden.
+app.get('/api/persons/:id/ai-reviews', requireViewer, (req, res) => {
+  const rows = db.prepare(`SELECT id, status, model, context_hash, created_at, applied_at
+    FROM ai_reviews WHERE person_id=? AND status NOT IN ('done','dismissed')
+    ORDER BY created_at DESC LIMIT 20`).all(req.params.id);
+  res.json(rows);
+});
+
+// Einzelnes Review holen (Suggestions + Status) — für Re-Open.
+app.get('/api/ai-reviews/:review_id', requireViewer, (req, res) => {
+  const row = db.prepare('SELECT * FROM ai_reviews WHERE id=?').get(req.params.review_id);
+  if (!row) return res.status(404).json({ error: 'review not found' });
+  let suggestions = null;
+  try { suggestions = JSON.parse(row.suggestions); } catch { /* ignore */ }
+  res.json({ ...row, suggestions });
 });
 
 // Apply: wendet selektierte Vorschläge an. Body: { accepted: { new_persons: [idx...], ... } }

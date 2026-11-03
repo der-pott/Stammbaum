@@ -105,6 +105,12 @@ const api = {
   async researchAddUrl(person_id, url) {
     return j(await fetch(`/api/persons/${person_id}/research/add-url`, postJson({ url })));
   },
+  async listOpenReviews(person_id) {
+    return j(await fetch(`/api/persons/${person_id}/ai-reviews`));
+  },
+  async getReview(review_id) {
+    return j(await fetch(`/api/ai-reviews/${review_id}`));
+  },
   async researchConsensus(person_id) {
     return j(await fetch(`/api/persons/${person_id}/research/consensus`));
   },
@@ -2728,11 +2734,19 @@ async function loadResearchHits(personId) {
     body.innerHTML = '';
     renderConsensus(body, consensusResp?.consensus || []);
     renderSourceGrid(body, sources, hits, personId);
+    // Offene KI-Analysen prominent anzeigen — sonst "versteckt" der User
+    // sie und sieht die nicht-übernommenen Vorschläge nie wieder.
+    try {
+      const openReviews = await api.listOpenReviews(personId);
+      if (openReviews.length) renderOpenReviews(body, openReviews, personId);
+    } catch { /* ignore */ }
     renderHitsList(body, hits, personId);
     if (state.role === 'editor') {
-      body.appendChild(h('div', { class: 'ext-head', style: 'margin-top: 16px' },
+      body.appendChild(renderResearchFlowHelp());
+      body.appendChild(h('div', { class: 'ext-head', style: 'margin-top: 16px; flex-wrap: wrap; gap: 8px' },
         btnOutline('🔎 Recherche starten', () => scrapeHits(personId)),
         btnOutline('🔗 URL hinzufügen', () => addManualUrl(personId)),
+        btnOutline('🧹 Alte Treffer aufräumen', () => cleanupStaleHits(personId), 'subtle'),
       ));
     }
   } catch (e) {
@@ -2903,6 +2917,61 @@ function renderClosedHitRow(hit, personId) {
     ));
   }
   return row;
+}
+
+function renderOpenReviews(parent, reviews, personId) {
+  const box = h('div', { class: 'open-reviews-box' },
+    h('div', { class: 'open-reviews-head' },
+      h('span', { class: 'eyebrow' }, `Offene KI-Analysen (${reviews.length})`),
+      h('span', { class: 'meta' }, 'noch nicht alle Vorschläge übernommen'),
+    ),
+  );
+  for (const r of reviews) {
+    const label = r.context_hash?.startsWith('hit:')
+      ? `aus bestätigtem Treffer (${r.created_at.slice(0, 10)})`
+      : `Dossier-Analyse (${r.created_at.slice(0, 10)})`;
+    const row = h('div', { class: 'open-review-row' },
+      h('div', { class: 'open-review-label' }, label),
+      h('div', { class: 'open-review-status' }, r.status),
+      btnOutline('Öffnen', async () => {
+        try {
+          const full = await api.getReview(r.id);
+          openAiReviewDialogWithData(personId, {
+            review_id: full.id,
+            suggestions: full.suggestions,
+            source_hit_title: r.context_hash?.startsWith('hit:') ? 'bestätigter Treffer' : 'Dossier-Analyse',
+          });
+        } catch (e) { alert('Fehler: ' + e.message); }
+      }, 'small'),
+    );
+    box.appendChild(row);
+  }
+  parent.appendChild(box);
+}
+
+function renderResearchFlowHelp() {
+  const details = h('details', { class: 'research-flow-help' });
+  details.appendChild(h('summary', {}, 'Wie läuft die Recherche?'));
+  details.appendChild(h('ol', { class: 'flow-steps' },
+    h('li', {}, h('b', {}, '1. Recherche starten'), ' — scant 17 Quellen (Firecrawl, Wikipedia, Archive, DNB, VIAF…). Treffer landen oben als "offen".'),
+    h('li', {}, h('b', {}, '2. Treffer sichten'), ' — pro Treffer: ', h('b', {}, '✓ Bestätigen'), ' (öffnet KI-Analyse der Quelle sofort), ', h('b', {}, 'Notiz'), ' (nur als Quellenlink ins Dossier), oder ', h('b', {}, 'Verwerfen'), ' (Treffer irrelevant).'),
+    h('li', {}, h('b', {}, '3. Vorschläge übernehmen'), ' — jede bestätigte Quelle extrahiert via Claude Fakten (Eltern, Berufe, Wohnorte, Ausbildung, Anekdoten). Du bestätigst pro Checkbox welche in die Person übernommen werden.'),
+    h('li', {}, h('b', {}, '4. ✨ KI-Update'), ' — holistische Analyse über ', h('i', {}, 'alle'), ' bestätigten Quellen + offene Treffer gleichzeitig. Nützlich wenn mehrere Quellen zusammen Zusammenhänge zeigen.'),
+    h('li', {}, h('b', {}, '5. 🧹 Alte Treffer aufräumen'), ' — nach Namenskorrektur: Treffer deren Titel/Snippet den aktuellen Nachnamen nicht mehr enthält werden auto-verworfen.'),
+  ));
+  return details;
+}
+
+async function cleanupStaleHits(personId) {
+  const ok = confirm('Alle offenen Treffer prüfen und die automatisch verwerfen, deren Titel/Snippet den aktuellen Nachnamen/Geburtsnamen/Vornamen nicht mehr enthalten? (nützlich nach Namenskorrektur)');
+  if (!ok) return;
+  try {
+    const r = await j(await fetch(`/api/persons/${personId}/research/cleanup-stale`, postJson({})));
+    alert(`${r.auto_dismissed || 0} alte Treffer wurden verworfen (sind jetzt in "Durchgeführte Recherchen" sichtbar und mit "Zurücknehmen" reversibel).`);
+    await loadResearchHits(personId);
+  } catch (e) {
+    alert('Fehler: ' + (e.message || e));
+  }
 }
 
 async function addManualUrl(personId) {

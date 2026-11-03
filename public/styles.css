@@ -1484,6 +1484,42 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
   padding-top: var(--sp-3);
 }
 .ai-section:first-child { border-top: 0; padding-top: 0; }
+.research-flow-help {
+  margin-top: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+.research-flow-help summary {
+  cursor: pointer; color: var(--ink-soft); font-size: 12px;
+  text-transform: uppercase; letter-spacing: 0.08em;
+}
+.research-flow-help .flow-steps {
+  margin-top: var(--sp-2); padding-left: var(--sp-4);
+  line-height: 1.6; color: var(--ink);
+}
+.research-flow-help .flow-steps li { margin-bottom: 4px; }
+.open-reviews-box {
+  margin-top: var(--sp-3); padding: var(--sp-3);
+  background: color-mix(in oklab, var(--c-info, #4a7bb0) 8%, var(--surface-raised));
+  border-left: 3px solid var(--c-info, #4a7bb0);
+  border-radius: var(--radius-sm);
+}
+.open-reviews-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: var(--sp-2);
+}
+.open-reviews-head .meta { font-size: 11px; color: var(--ink-soft); }
+.open-review-row {
+  display: grid; grid-template-columns: 1fr auto auto; gap: var(--sp-3);
+  align-items: center; padding: 6px 0;
+  border-top: 1px dotted var(--line-soft, var(--line));
+}
+.open-review-row:first-of-type { border-top: 0; }
+.open-review-label { font-size: 13px; }
+.open-review-status { font-size: 11px; color: var(--ink-soft); text-transform: uppercase; }
 .closed-hits {
   margin-top: var(--sp-4);
   border-top: 1px solid var(--line-soft, var(--line));
