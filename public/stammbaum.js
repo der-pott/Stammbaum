@@ -655,10 +655,12 @@ function computeLayoutDagre() {
     const id = q.shift();
     const r = rank.get(id);
     for (const pid of parentsOfChild.get(id) || []) {
-      if (!rank.has(pid)) { rank.set(pid, r + 1); q.push(pid); }
+      // ancestors get negative rank → dagre TB places them above ego
+      if (!rank.has(pid)) { rank.set(pid, r - 1); q.push(pid); }
     }
     for (const cid of childrenOfParent.get(id) || []) {
-      if (!rank.has(cid)) { rank.set(cid, r - 1); q.push(cid); }
+      // descendants get positive rank → dagre TB places them below ego
+      if (!rank.has(cid)) { rank.set(cid, r + 1); q.push(cid); }
     }
   }
   // Spouse-Pass (never mix spouses into the parent BFS above — rank drift):
@@ -673,10 +675,10 @@ function computeLayoutDagre() {
     }
     for (const [pid, r] of Array.from(rank.entries())) {
       for (const parentId of parentsOfChild.get(pid) || []) {
-        if (!rank.has(parentId)) { rank.set(parentId, r + 1); changed = true; }
+        if (!rank.has(parentId)) { rank.set(parentId, r - 1); changed = true; }
       }
       for (const childId of childrenOfParent.get(pid) || []) {
-        if (!rank.has(childId)) { rank.set(childId, r - 1); changed = true; }
+        if (!rank.has(childId)) { rank.set(childId, r + 1); changed = true; }
       }
     }
   }
@@ -685,7 +687,7 @@ function computeLayoutDagre() {
   const inGraph = new Set(rank.keys());
   const g = new dagre.graphlib.Graph({ multigraph: false, compound: false, directed: true });
   g.setGraph({
-    rankdir: 'BT',
+    rankdir: 'TB',
     ranksep: ROW_H,
     nodesep: Math.max(NODE_W, 128) * 0.4 + 32,
     edgesep: 24,
@@ -772,21 +774,28 @@ function computeLayoutDagre() {
   // ---- 9. Normalisieren + Ego-Zentrierung -------------------------------
   const marginL = 80, marginR = 80, marginT = 80, marginB = 60;
   const vals = Array.from(pos.values());
-  let minX = Math.min(...vals.map(p => p.x - p.w / 2));
-  let maxX = Math.max(...vals.map(p => p.x + p.w / 2));
-  let minY = Math.min(...vals.map(p => p.y - p.h / 2));
-  let maxY = Math.max(...vals.map(p => p.y + p.h / 2));
-  for (const p of vals) { p.x -= minX - marginL; p.y -= minY - marginT; }
-  let totalW = Math.max((maxX - minX) + marginL + marginR, 400);
-  let totalH = Math.max((maxY - minY) + marginT + marginB, 400);
+  const minX0 = Math.min(...vals.map(p => p.x - p.w / 2));
+  const maxX0 = Math.max(...vals.map(p => p.x + p.w / 2));
+  const minY0 = Math.min(...vals.map(p => p.y - p.h / 2));
+  const maxY0 = Math.max(...vals.map(p => p.y + p.h / 2));
+  // Normalise Y first (no ego constraint on vertical axis)
+  for (const p of vals) p.y -= (minY0 - marginT);
+  const totalH = Math.max((maxY0 - minY0) + marginT + marginB, 400);
+  // X: place ego exactly at canvas centre by symmetric padding
   const egoPos = pos.get(ego.id);
+  let totalW;
   if (egoPos) {
-    const shift = totalW / 2 - egoPos.x;
+    // Raw distances from ego to left/right extremes (before any x-shift)
+    const leftReach  = egoPos.x - minX0;
+    const rightReach = maxX0 - egoPos.x;
+    const half = Math.max(leftReach, rightReach) + Math.max(marginL, marginR);
+    totalW = Math.max(2 * half, 400);
+    // Shift so that ego lands at totalW/2
+    const shift = half - egoPos.x;
     for (const p of vals) p.x += shift;
-    minX = Math.min(...vals.map(p => p.x - p.w / 2));
-    maxX = Math.max(...vals.map(p => p.x + p.w / 2));
-    if (minX < 0) { for (const p of vals) p.x -= minX; totalW = Math.max(maxX - minX, totalW); }
-    if (maxX > totalW) totalW = maxX + marginR;
+  } else {
+    for (const p of vals) p.x -= (minX0 - marginL);
+    totalW = Math.max((maxX0 - minX0) + marginL + marginR, 400);
   }
 
   // ---- 10. Return-Shape bauen -------------------------------------------
