@@ -1159,7 +1159,58 @@ function computeLayout() {
     };
     let bestLen = totalCrossLength(rootAnchors);
     let improved = true, swapCount = 0;
+    // Pass A: adjacent swap — fast, local minima.
     while (improved && swapCount < 200) {
+      improved = false;
+      for (let i = 0; i < rootAnchors.length - 1; i++) {
+        const tmp = rootAnchors[i];
+        rootAnchors[i] = rootAnchors[i + 1];
+        rootAnchors[i + 1] = tmp;
+        const newLen = totalCrossLength(rootAnchors);
+        if (newLen + 0.5 < bestLen) {
+          bestLen = newLen;
+          improved = true;
+          swapCount++;
+        } else {
+          rootAnchors[i + 1] = rootAnchors[i];
+          rootAnchors[i] = tmp;
+        }
+      }
+    }
+    // Pass B: single-root re-insertion — escapes local minima where moving
+    // a root across many positions pays off but no adjacent step does.
+    let insertImproved = true, insertCount = 0;
+    while (insertImproved && insertCount < 100) {
+      insertImproved = false;
+      for (let i = 0; i < rootAnchors.length; i++) {
+        const r = rootAnchors[i];
+        const current = rootAnchors.slice();
+        current.splice(i, 1);
+        let bestJ = i, bestInsertLen = bestLen;
+        for (let j = 0; j <= current.length; j++) {
+          if (j === i) continue;
+          const cand = current.slice();
+          cand.splice(j, 0, r);
+          const l = totalCrossLength(cand);
+          if (l + 0.5 < bestInsertLen) {
+            bestInsertLen = l;
+            bestJ = j;
+          }
+        }
+        if (bestJ !== i) {
+          rootAnchors.length = 0;
+          const final = current.slice();
+          final.splice(bestJ, 0, r);
+          rootAnchors.push(...final);
+          bestLen = bestInsertLen;
+          insertImproved = true;
+          insertCount++;
+        }
+      }
+    }
+    // Pass C: another adjacent-swap sweep after re-insertion fine-tuning.
+    improved = true;
+    while (improved && swapCount < 400) {
       improved = false;
       for (let i = 0; i < rootAnchors.length - 1; i++) {
         const tmp = rootAnchors[i];
