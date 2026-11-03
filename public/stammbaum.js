@@ -1748,6 +1748,10 @@ function renderTree() {
   //    (when co-parent is a satellite in the anchor's slot) or from anchor alone.
   const PARENT_STUB = 18;
   const CHILD_STUB = 18;
+  // Vertikal-Puffer unterhalb des Parent-Namenblocks damit die horizontale
+  // Sibling-Bar NICHT durch Namen-/Datum-Labels fremder Nodes laufen kann.
+  // = AVATAR unten + name-gap (18) + 2 Zeilen Name (2*NAME_LINE_H) + dates (14) + Puffer.
+  const PARENT_LABEL_H = 18 + 2 * NAME_LINE_H + 14 + 6;
 
   // Build (anchor, coparent) → [childNodes] groups.
   const dropGroups = new Map();
@@ -1802,7 +1806,13 @@ function renderTree() {
       parentCx = Math.round((sPos.anchorCx + sPos.satCx.get(g.coparentId)) / 2);
     }
     const childTopY = kidsNodes[0].y;
-    const barY = Math.round((parentY + PARENT_STUB + childTopY - CHILD_STUB) / 2);
+    // Bar sitzt unterhalb des Parent-Label-Blocks, nicht in dessen Mitte.
+    // Damit sie weder Parent-Name noch Dates fremder Nodes auf gleicher Y
+    // kreuzt. Floor + Ceiling clampen zwischen "direkt unter Label" und
+    // "knapp uebers Kind".
+    const floorY = parentY + PARENT_LABEL_H;
+    const ceilY = childTopY - CHILD_STUB;
+    const barY = Math.round(Math.max(floorY, Math.min(ceilY, floorY + 10)));
 
     // Drop from parent-midpoint down to barY (pixel-aligned).
     const px = Math.round(parentCx);
