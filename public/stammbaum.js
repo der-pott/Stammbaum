@@ -218,6 +218,10 @@ async function reload() {
   state.edges = t.edges;
   const h = parseHash();
   if (h && state.persons.some(p => p.id === h)) state.selected = h;
+  if (firstLoad && document.fonts && document.fonts.ready) {
+    try { await document.fonts.load('600 13px "Instrument Sans"'); } catch(_) {}
+    try { await document.fonts.ready; } catch(_) {}
+  }
   render();
   if (firstLoad) requestAnimationFrame(fitTree);
 }
@@ -568,6 +572,20 @@ function wrapText(str, maxWidth, font = '600 13px "Instrument Sans", sans-serif'
   return lines.length ? lines : [''];
 }
 
+// Returns the RENDERED width of a person's wrapped name block.
+// Floor: NODE_W (circle visual). Ceiling: NAME_WRAP_W (wrap cap).
+function labelWidthOf(person) {
+  const name = primaryNameOf(person);
+  const lines = wrapText(name, NAME_WRAP_W);
+  let w = 0;
+  for (const l of lines) {
+    const lw = measureText(l);
+    if (lw > w) w = lw;
+  }
+  // Add a small horizontal safety pad (+8) for sub-pixel kerning / webfont jitter.
+  return Math.max(NODE_W, Math.min(NAME_WRAP_W, Math.ceil(w) + 8));
+}
+
 // Layout invariants (must hold after every computeLayout() run):
 //
 //   1. Non-Overlap. No two node bboxes (circle + name/date label block)
@@ -698,6 +716,10 @@ function computeLayout() {
     }
   }
   for (const p of state.persons) if (!gen.has(p.id)) gen.set(p.id, 0);
+
+  const labelW = new Map();
+  for (const p of state.persons) labelW.set(p.id, labelWidthOf(p));
+  const widthOf = (id) => labelW.get(id) || NODE_W;
 
   // --- SLOTS ----------------------------------------------------------
   // A SLOT is one position in a generation row. It consists of an anchor
@@ -939,10 +961,12 @@ function computeLayout() {
     rightSats.sort(sorter);  // index 0 = innermost on right
     leftSats.sort(sorter);   // index 0 = innermost on left
     const totalSats = rightSats.length + leftSats.length;
-    const width = NODE_W + totalSats * (MARRIAGE_GAP + NODE_W);
+    const aW = widthOf(a);
+    let width = aW;
+    for (const sid of allSats) width += widthOf(sid) + MARRIAGE_GAP;
     // Offset of anchor center from slot left edge (so sibling placement can
     // position the child-anchor cx correctly even with left-sats present).
-    const anchorOffset = leftSats.length * (NODE_W + MARRIAGE_GAP) + NODE_W / 2;
+    const anchorOffset = leftSats.reduce((s, sid) => s + widthOf(sid) + MARRIAGE_GAP, 0) + aW / 2;
     slotByAnchor.set(a, {
       anchorId: a,
       satellites: [...leftSats, ...rightSats],  // kept for legacy iteration
@@ -1040,14 +1064,17 @@ function computeLayout() {
     const leftOuterToInner = [...slot.leftSats].reverse();
     let cursor = slotLeftX;
     for (const sid of leftOuterToInner) {
-      satCx.set(sid, cursor + NODE_W / 2);
-      cursor += NODE_W + MARRIAGE_GAP;
+      const sW = widthOf(sid);
+      satCx.set(sid, cursor + sW / 2);
+      cursor += sW + MARRIAGE_GAP;
     }
-    const anchorCx = cursor + NODE_W / 2;
-    cursor += NODE_W + MARRIAGE_GAP;
+    const aW_slot = widthOf(a);
+    const anchorCx = cursor + aW_slot / 2;
+    cursor += aW_slot + MARRIAGE_GAP;
     for (const sid of slot.rightSats) {
-      satCx.set(sid, cursor + NODE_W / 2);
-      cursor += NODE_W + MARRIAGE_GAP;
+      const sW = widthOf(sid);
+      satCx.set(sid, cursor + sW / 2);
+      cursor += sW + MARRIAGE_GAP;
     }
     slotPos.set(a, { anchorCx, satCx, y, slotLeftX, width: slot.width });
   }
@@ -1127,7 +1154,7 @@ function computeLayout() {
   // Place roots left-to-right.
   let cursor = marginL;
   for (const r of rootAnchors) {
-    const w = subtreeWidth.get(r) || NODE_W;
+    const w = subtreeWidth.get(r) || widthOf(r);
     const slotW = slotByAnchor.get(r).width;
     const slotLeftX = cursor + (w - slotW) / 2;  // center the slot inside its subtree
     layoutSlot(r, slotLeftX, marginT + (gen.get(r) ?? 0) * ROW_H);
@@ -1147,14 +1174,15 @@ function computeLayout() {
   function makeNode(personId, x, y) {
     const p = personById.get(personId);
     if (!p) return null;
-    const n = { id: personId, person: p, x, y, w: NODE_W, h: NODE_H, cx: x + NODE_W / 2, cy: y + AVATAR_R };
+    const pW = widthOf(personId);
+    const n = { id: personId, person: p, x, y, w: pW, h: NODE_H, cx: x + pW / 2, cy: y + AVATAR_R };
     nodes.push(n); posById.set(personId, n); return n;
   }
 
   for (const [a, pos] of slotPos) {
-    makeNode(a, Math.round(pos.anchorCx - NODE_W / 2), pos.y);
+    makeNode(a, Math.round(pos.anchorCx - widthOf(a) / 2), pos.y);
     for (const [sid, cx] of pos.satCx) {
-      makeNode(sid, Math.round(cx - NODE_W / 2), pos.y);
+      makeNode(sid, Math.round(cx - widthOf(sid) / 2), pos.y);
     }
   }
 
@@ -1177,10 +1205,10 @@ function computeLayout() {
     const base = (maxXByY.get(y) || cursor) + FAMILY_GAP;
     const x = orphanCursorByY.get(y) ?? base;
     makeNode(p.id, x, y);
-    const next = x + NODE_W + FAMILY_GAP;
+    const next = x + widthOf(p.id) + FAMILY_GAP;
     orphanCursorByY.set(y, next);
     // keep the row-max in sync so later orphans on the same row stack
-    maxXByY.set(y, Math.max(maxXByY.get(y) || 0, x + NODE_W));
+    maxXByY.set(y, Math.max(maxXByY.get(y) || 0, x + widthOf(p.id)));
   }
 
   // --- edges ----------------------------------------------------------
@@ -1223,9 +1251,7 @@ function computeLayout() {
   //    normal anchor pipeline — they fall through to the orphan pass and get
   //    the usual cross-tree dashed birth-arc. This is the safe fallback that
   //    guarantees no node overlap even in dense trees.
-  const COUPLE_W_EFF = NODE_W * 2 + MARRIAGE_GAP;
   const UPSTREAM_PAD = 32;
-  const halfW = COUPLE_W_EFF / 2;
   const upstreamNodes = [];
   const toPlace = [];
   for (const [childId, uc] of upstreamCouples) {
@@ -1245,8 +1271,8 @@ function computeLayout() {
     ranges.sort((a, b) => a.left - b.left);
     return ranges;
   }
-  function hasOverlap(cx, y) {
-    const x1 = cx - halfW, x2 = cx + halfW;
+  function hasOverlap(cx, y, halfW_t) {
+    const x1 = cx - halfW_t, x2 = cx + halfW_t;
     for (const r of occupiedRanges(y)) {
       if (!(x2 < r.left || r.right < x1)) return true;
     }
@@ -1259,32 +1285,34 @@ function computeLayout() {
   const wantedUpstreamSpouseKeys = new Set(toPlace.map(t => t.uc.edgeKey));
   const skippedUpstream = new Set();
   for (const t of toPlace) {
+    const halfW_t = (widthOf(t.uc.anchorId) + widthOf(t.uc.satId) + MARRIAGE_GAP) / 2;
     let cx = t.idealCx;
-    if (hasOverlap(cx, t.y)) {
-      // Try a lateral shift within one COUPLE_W_EFF. More aggressive shifts
+    if (hasOverlap(cx, t.y, halfW_t)) {
+      // Try a lateral shift within one couple-width. More aggressive shifts
       // (moving neighboring subtrees out of the way) introduced new overlaps
       // because sibling slots in the same row can't be moved independently
       // without re-layouting their own couple/children spacing.
       const ranges = occupiedRanges(t.y);
       let best = null;
       for (const r of ranges) {
-        for (const cand of [r.left - halfW, r.right + halfW]) {
-          if (!hasOverlap(cand, t.y)) {
+        for (const cand of [r.left - halfW_t, r.right + halfW_t]) {
+          if (!hasOverlap(cand, t.y, halfW_t)) {
             const dist = Math.abs(cand - t.idealCx);
             if (best === null || dist < best.dist) best = { cx: cand, dist };
           }
         }
       }
-      if (!best || best.dist > COUPLE_W_EFF) {
+      if (!best || best.dist > halfW_t * 2) {
         skippedUpstream.add(t.childId);
         continue;
       }
       cx = best.cx;
     }
-    const anchorCx = cx - (NODE_W + MARRIAGE_GAP) / 2;
-    const satCx = cx + (NODE_W + MARRIAGE_GAP) / 2;
-    const anchorNode = makeNode(t.uc.anchorId, Math.round(anchorCx - NODE_W / 2), t.y);
-    const satNode = makeNode(t.uc.satId, Math.round(satCx - NODE_W / 2), t.y);
+    const aW = widthOf(t.uc.anchorId), sW = widthOf(t.uc.satId);
+    const anchorCx = cx - (MARRIAGE_GAP + sW) / 2;
+    const satCx    = cx + (MARRIAGE_GAP + aW) / 2;
+    const anchorNode = makeNode(t.uc.anchorId, Math.round(anchorCx - aW / 2), t.y);
+    const satNode    = makeNode(t.uc.satId,    Math.round(satCx    - sW / 2), t.y);
     upstreamNodes.push({ ...t.uc, childId: t.childId, anchorNode, satNode, childNode: t.childNode });
   }
   // Reinstate skipped parents so they get rendered via the normal path
@@ -1316,9 +1344,9 @@ function computeLayout() {
       const base = (maxXByY.get(y) || cursor) + FAMILY_GAP;
       const x = orphanCursorByY.get(y) ?? base;
       makeNode(p.id, x, y);
-      const next = x + NODE_W + FAMILY_GAP;
+      const next = x + widthOf(p.id) + FAMILY_GAP;
       orphanCursorByY.set(y, next);
-      maxXByY.set(y, Math.max(maxXByY.get(y) || 0, x + NODE_W));
+      maxXByY.set(y, Math.max(maxXByY.get(y) || 0, x + widthOf(p.id)));
     }
   }
 
@@ -1556,7 +1584,7 @@ function renderTree() {
     const cp = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath');
     cp.setAttribute('id', 'clip-' + n.id);
     const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    c.setAttribute('cx', NODE_W / 2);
+    c.setAttribute('cx', n.w / 2);
     c.setAttribute('cy', AVATAR_R);
     c.setAttribute('r', AVATAR_R);
     cp.appendChild(c);
@@ -1909,7 +1937,7 @@ function renderTree() {
 
     // Avatar background circle (acts as frame + fallback bg)
     const bgCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    bgCircle.setAttribute('cx', NODE_W / 2);
+    bgCircle.setAttribute('cx', n.w / 2);
     bgCircle.setAttribute('cy', AVATAR_R);
     bgCircle.setAttribute('r', AVATAR_R);
     bgCircle.setAttribute('class', 'node-avatar');
@@ -1918,7 +1946,7 @@ function renderTree() {
     // Portrait image if available (clipped to circle)
     if (n.person.portrait_image_id) {
       const img = document.createElementNS('http://www.w3.org/2000/svg', 'image');
-      img.setAttribute('x', NODE_W / 2 - AVATAR_R);
+      img.setAttribute('x', n.w / 2 - AVATAR_R);
       img.setAttribute('y', 0);
       img.setAttribute('width', AVATAR_R * 2);
       img.setAttribute('height', AVATAR_R * 2);
@@ -1928,13 +1956,13 @@ function renderTree() {
       g.appendChild(img);
     } else {
       // Initials fallback
-      const init = textEl(NODE_W / 2, AVATAR_R, initialsOf(n.person), { anchor: 'middle', cls: 'node-initials' });
+      const init = textEl(n.w / 2, AVATAR_R, initialsOf(n.person), { anchor: 'middle', cls: 'node-initials' });
       g.appendChild(init);
     }
 
     // Ring (over the image, so selected state is visible)
     const ring = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    ring.setAttribute('cx', NODE_W / 2);
+    ring.setAttribute('cx', n.w / 2);
     ring.setAttribute('cy', AVATAR_R);
     ring.setAttribute('r', AVATAR_R);
     ring.setAttribute('class', 'node-ring');
@@ -1944,13 +1972,13 @@ function renderTree() {
     const nmText = primaryNameOf(n.person);
     const nameLines = wrapText(nmText, NAME_WRAP_W);
     const nameT = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    nameT.setAttribute('x', NODE_W / 2);
+    nameT.setAttribute('x', n.w / 2);
     nameT.setAttribute('y', AVATAR_R * 2 + 18);
     nameT.setAttribute('text-anchor', 'middle');
     nameT.setAttribute('class', 'node-name');
     for (let i = 0; i < nameLines.length; i++) {
       const ts = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
-      ts.setAttribute('x', NODE_W / 2);
+      ts.setAttribute('x', n.w / 2);
       if (i > 0) ts.setAttribute('dy', NAME_LINE_H);
       ts.textContent = nameLines[i];
       nameT.appendChild(ts);
@@ -1961,7 +1989,7 @@ function renderTree() {
     const dates = fmtLifeShort(n.person);
     let belowY = AVATAR_R * 2 + 18 + nameLines.length * NAME_LINE_H + 2;
     if (dates) {
-      const dT = textEl(NODE_W / 2, belowY, dates, { anchor: 'middle', cls: 'node-dates' });
+      const dT = textEl(n.w / 2, belowY, dates, { anchor: 'middle', cls: 'node-dates' });
       g.appendChild(dT);
       belowY += 14;
     }
@@ -1982,7 +2010,7 @@ function renderTree() {
       })();
       if (parEdges.length) {
         const text = birthSurname ? `geb. ${birthSurname}` : 'geb.';
-        const gebT = textEl(NODE_W / 2, belowY, text, { anchor: 'middle', cls: 'node-geb' });
+        const gebT = textEl(n.w / 2, belowY, text, { anchor: 'middle', cls: 'node-geb' });
         g.appendChild(gebT);
       }
     }
