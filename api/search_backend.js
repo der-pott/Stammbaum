@@ -201,6 +201,9 @@ async function firecrawlSearch(q, { limit }) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT);
   try {
+    // Firecrawl's /v1/search backend chokes on double-quotes in the query
+    // (HTTP 500). Strip them — Firecrawl handles phrase matching internally.
+    const sanitised = q.replace(/["]/g, '').trim();
     const res = await fetch(endpoint, {
       method: 'POST',
       signal: ctrl.signal,
@@ -209,7 +212,7 @@ async function firecrawlSearch(q, { limit }) {
         ...(key ? { 'Authorization': `Bearer ${key}` } : {}),
         'User-Agent': UA,
       },
-      body: JSON.stringify({ query: q, limit: Math.min(limit, 20) }),
+      body: JSON.stringify({ query: sanitised, limit: Math.min(limit, 20) }),
     });
     if (!res.ok) throw new Error(`Firecrawl HTTP ${res.status}`);
     const payload = await res.json();
