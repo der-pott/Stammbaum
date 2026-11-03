@@ -11,6 +11,8 @@ const SYSTEM_PROMPT = `Du bist Dossier-Analyst für eine private Familien-Archiv
 Finde:
 
 1. ERWÄHNTE PERSONEN die noch nicht in der DB sind. Beispiel: Notes "Vater von Iris-Andrea, verheiratet mit Giesela Sehnke geb. Elsner" → wenn Giesela nicht in Namensregister → als new_person vorschlagen. Gleiches gilt für im Web-Content erwähnte Verwandte, Kollegen, Lehrer, Partner (letztere nur falls Familienbezug plausibel).
+
+   PFLICHT-CHECK VOR DEM ANTWORTEN: Gehe JEDEN Volltext (bestätigt + unbestätigt) nochmal durch mit der Frage "sind Vater UND Mutter beide genannt?". Wenn ja, aber in parents der Person steht nur EINER (oder keiner): den FEHLENDEN Elternteil als new_person + parent-edge vorschlagen. "Vater schon in parents" ist KEIN Grund die Mutter wegzulassen — Herbert und Irene sind ZWEI Personen. Das gleiche Prinzip für Ehepartner und Geschwister: fehlender zweiter/dritter Verwandter wird extra vorgeschlagen.
 2. ABLEITBARE BEZIEHUNGEN. Beispiel: "Vater von X" → parent-edge von dieser Person zu X. "Verheiratet mit Y" → spouse-edge.
 
    WICHTIG — BEI PARENT-EDGES BEIDE ELTERN BERÜCKSICHTIGEN:
@@ -131,7 +133,7 @@ function buildUserPrompt(ctx, register, alreadyProcessed = []) {
 // Bump bei Prompt-Änderungen die eine Re-Analyse rechtfertigen.
 // v2: verified_facts werden jetzt als Extraktionsquelle statt reiner Anker
 //     behandelt (sonst fehlten Eltern-Vorschläge nachdem Hit bestätigt wurde).
-const PROMPT_VERSION = 'v2';
+const PROMPT_VERSION = 'v3';
 
 export function hashContext(ctx) {
   const canonical = JSON.stringify({
