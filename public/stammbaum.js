@@ -615,14 +615,20 @@ function labelWidthOf(person) {
 //
 // A regression test in `scripts/test_layout_overlaps.js` loads the live tree
 // and asserts invariant 1 holds for the real data.
-function computeLayout() {
-  if (!state.persons.length) return null;
 
-  // Build directed relationship maps.
-  const parentOf = new Map();   // child -> [parentId]
-  const childOf = new Map();    // parent -> [childId]
-  const spouseOf = new Map();   // id -> Set(spouseId)
-  const spouseEdges = new Map(); // "a|b"(sorted) -> edge object
+/* --- Ego-centered pedigree (Ahnentafel) layout ----------------------- */
+const EGO_PERSON_MATCHER = { given_name_includes: 'Maximilian', surname: 'Pott', birth_date: '1981-04-06' };
+const ANCESTOR_SPREAD = { 1: 640, 2: 320, 3: 160, 4: 80 }; // horizontal step per generation (2× cascade)
+const COLLATERAL_GAP = 180;
+const ORPHAN_GAP = 400;
+
+// Extracts parentOf/childOf/spouseOf/spouseEdges maps from state.
+// Shared by legacy and pedigree layout paths.
+function buildRelMaps(state) {
+  const parentOf = new Map();
+  const childOf = new Map();
+  const spouseOf = new Map();
+  const spouseEdges = new Map();
   for (const p of state.persons) {
     parentOf.set(p.id, []);
     childOf.set(p.id, []);
@@ -639,36 +645,310 @@ function computeLayout() {
       spouseEdges.set(k, e);
     }
   }
-
-  // Implied spouse edges — two persons share ≥1 child but have no explicit
-  // spouse-edge in the DB. Add a virtual edge with status='implied' so they
-  // become eligible for the mutual-primary couple rule and render as a
-  // (dashed) couple. UI treats them as a soft suggestion.
-  const impliedSpouseEdges = new Set();  // "a|b" keys of implied edges
+  // Implied spouse edges: two persons share ≥1 child but have no explicit spouse-edge.
+  const implied = new Set();
   for (const p of state.persons) {
-    const kids = childOf.get(p.id) || [];
-    for (const k of kids) {
-      const otherParents = (parentOf.get(k) || []).filter(x => x !== p.id);
-      for (const o of otherParents) {
-        if (p.id === o) continue;
-        if (spouseOf.get(p.id)?.has(o)) continue;  // already has explicit spouse edge
+    for (const k of (childOf.get(p.id) || [])) {
+      for (const o of (parentOf.get(k) || []).filter(x => x !== p.id)) {
+        if (spouseOf.get(p.id)?.has(o)) continue;
         const key = p.id < o ? `${p.id}|${o}` : `${o}|${p.id}`;
-        if (spouseEdges.has(key)) continue;
-        if (impliedSpouseEdges.has(key)) continue;
-        impliedSpouseEdges.add(key);
+        if (spouseEdges.has(key) || implied.has(key)) continue;
+        implied.add(key);
         spouseOf.get(p.id)?.add(o);
         spouseOf.get(o)?.add(p.id);
-        spouseEdges.set(key, {
-          type: 'spouse',
-          from_id: p.id,
-          to_id: o,
-          status: 'implied',
-          since: null, until: null,
-          _implied: true,
-        });
+        spouseEdges.set(key, { type: 'spouse', from_id: p.id, to_id: o, status: 'implied', since: null, until: null, _implied: true });
       }
     }
   }
+  return { parentOf, childOf, spouseOf, spouseEdges };
+}
+
+function computePedigreeLayout(state, rels) {
+  const { parentOf, childOf, spouseOf, spouseEdges } = rels;
+  const personById = new Map(state.persons.map(p => [p.id, p]));
+  const marginL = 80, marginT = 80, marginR = 80;
+
+  // Find ego by matcher; fall back to person with deepest descendant subtree.
+  let egoId = null;
+  for (const p of state.persons) {
+    if (p.given_name?.includes(EGO_PERSON_MATCHER.given_name_includes)
+        && p.surname === EGO_PERSON_MATCHER.surname
+        && p.birth_date === EGO_PERSON_MATCHER.birth_date) {
+      egoId = p.id; break;
+    }
+  }
+  if (!egoId) {
+    let maxD = -1;
+    const depth = (id, seen = new Set()) => {
+      if (seen.has(id)) return 0; seen.add(id);
+      const kids = childOf.get(id) || [];
+      return kids.length ? 1 + Math.max(...kids.map(k => depth(k, seen))) : 0;
+    };
+    for (const p of state.persons) { const d = depth(p.id); if (d > maxD) { maxD = d; egoId = p.id; } }
+    console.warn('[pedigree] ego not matched, fallback:', egoId);
+  }
+  if (!egoId) throw new Error('[pedigree] no persons');
+
+  // BFS connected set from ego through parent/child/spouse edges.
+  const connected = new Set([egoId]);
+  {
+    const q = [egoId];
+    while (q.length) {
+      const id = q.shift();
+      for (const n of [...(parentOf.get(id) || []), ...(childOf.get(id) || []), ...(spouseOf.get(id) || [])]) {
+        if (!connected.has(n)) { connected.add(n); q.push(n); }
+      }
+    }
+  }
+
+  // Assign Ahnentafel numbers via BFS upward through parent edges.
+  // Heuristic for father/mother slot: gender='m' → father (nr*2), gender='f' → mother (nr*2+1);
+  // tie-break by lexicographic id. Note: edge schema has no 'gender' property; we use person.gender.
+  const ahnenNr = new Map();
+  const ahnenGen = new Map();
+  ahnenNr.set(egoId, 1); ahnenGen.set(egoId, 0);
+  {
+    const q = [egoId], vis = new Set([egoId]);
+    while (q.length) {
+      const id = q.shift();
+      const nr = ahnenNr.get(id);
+      const parents = (parentOf.get(id) || []).filter(p => connected.has(p) && !vis.has(p));
+      parents.sort((a, b) => {
+        const ga = personById.get(a)?.gender, gb = personById.get(b)?.gender;
+        if (ga === 'm' && gb !== 'm') return -1;
+        if (ga !== 'm' && gb === 'm') return 1;
+        if (ga === 'f' && gb !== 'f') return 1;
+        if (ga !== 'f' && gb === 'f') return -1;
+        return a < b ? -1 : 1;
+      });
+      for (let i = 0; i < Math.min(parents.length, 2); i++) {
+        const pid = parents[i]; vis.add(pid);
+        ahnenNr.set(pid, nr * 2 + i);
+        ahnenGen.set(pid, ahnenGen.get(id) + 1);
+        q.push(pid);
+      }
+    }
+  }
+  const ahnenSet = new Set(ahnenNr.keys());
+
+  // Horizontal step at generation g in the Ahnentafel binary tree.
+  const spreadAt = g => ANCESTOR_SPREAD[g] ?? Math.max(50, 80 / Math.pow(2, g - 4));
+
+  // Ancestor cx relative to egoCx=0, derived from Ahnentafel binary path.
+  // nr's bits below the MSB: '0' → step left, '1' → step right.
+  const ancestorRelCx = nr => {
+    const g = Math.floor(Math.log2(nr));
+    if (g === 0) return 0;
+    const bits = nr.toString(2).slice(1);
+    let cx = 0;
+    for (let k = 1; k <= g; k++) cx += bits[k - 1] === '0' ? -spreadAt(k) : spreadAt(k);
+    return cx;
+  };
+
+  const maxAncestorGen = ahnenGen.size ? Math.max(...ahnenGen.values()) : 0;
+  const egoCy = marginT + maxAncestorGen * ROW_H; // ego sits below all ancestors
+
+  // pos: id -> {cx, cy}, pre-normalization (egoCx = 0).
+  const pos = new Map();
+  for (const [id, nr] of ahnenNr) {
+    pos.set(id, { cx: ancestorRelCx(nr), cy: egoCy - ahnenGen.get(id) * ROW_H });
+  }
+
+  // Tidy-tree for ego's downline (non-ancestor connected persons).
+  const layoutSubtree = (id, depth) => {
+    const kids = (childOf.get(id) || []).filter(k => connected.has(k) && !ahnenSet.has(k));
+    if (!kids.length) {
+      return { w: NODE_W, place: cx => { pos.set(id, { cx, cy: egoCy + depth * ROW_H }); } };
+    }
+    const subs = kids.map(k => layoutSubtree(k, depth + 1));
+    const kidsW = subs.reduce((a, s) => a + s.w, 0) + SIBLING_GAP * (subs.length - 1);
+    const w = Math.max(kidsW, NODE_W);
+    return {
+      w,
+      place: cx => {
+        pos.set(id, { cx, cy: egoCy + depth * ROW_H });
+        let x = cx - kidsW / 2;
+        for (const sub of subs) { sub.place(x + sub.w / 2); x += sub.w + SIBLING_GAP; }
+      },
+    };
+  };
+  // ego at relative cx=0 (same as ancestor pass result — consistent because gen=0, ancestorRelCx(1)=0).
+  layoutSubtree(egoId, 0).place(0);
+
+  // Place spouses that are in connected but not yet positioned.
+  const placeSpousesOf = id => {
+    const p = pos.get(id); if (!p) return;
+    const sp = [...(spouseOf.get(id) || [])].filter(s => connected.has(s) && !ahnenSet.has(s) && s !== id);
+    let off = NODE_W + SIBLING_GAP;
+    for (const sid of sp) {
+      if (!pos.has(sid)) { pos.set(sid, { cx: p.cx + off, cy: p.cy }); off += NODE_W + SIBLING_GAP; }
+    }
+    const kids = (childOf.get(id) || []).filter(k => connected.has(k) && !ahnenSet.has(k));
+    for (const k of kids) placeSpousesOf(k);
+  };
+  placeSpousesOf(egoId);
+
+  // Build slot structures required by renderTree.
+  const slotByAnchor = new Map();
+  const slotPosMap = new Map();
+  const childSlotsOfAnchor = new Map();
+  const satelliteOf = new Map();
+  const isAnchor = new Set();
+
+  // Register a slot; satId=null for a lone anchor.
+  const addSlot = (anchorId, satId) => {
+    const ap = pos.get(anchorId); if (!ap) return;
+    if (satId && pos.has(satId)) {
+      const sp = pos.get(satId);
+      const slotW = Math.abs(sp.cx - ap.cx) + NODE_W;
+      const leftCx = Math.min(ap.cx, sp.cx);
+      slotByAnchor.set(anchorId, { rightSats: [satId], leftSats: [], width: slotW, anchorOffset: NODE_W / 2 });
+      slotPosMap.set(anchorId, { anchorCx: ap.cx, satCx: new Map([[satId, sp.cx]]), y: ap.cy - AVATAR_R, slotLeftX: leftCx - NODE_W / 2, width: slotW });
+      satelliteOf.set(satId, anchorId);
+    } else {
+      slotByAnchor.set(anchorId, { rightSats: [], leftSats: [], width: NODE_W, anchorOffset: NODE_W / 2 });
+      slotPosMap.set(anchorId, { anchorCx: ap.cx, satCx: new Map(), y: ap.cy - AVATAR_R, slotLeftX: ap.cx - NODE_W / 2, width: NODE_W });
+    }
+    isAnchor.add(anchorId);
+  };
+
+  // Ancestor couple slots: even Ahnentafel nr = father (anchor), nr+1 = mother (right satellite).
+  for (const [id, nr] of ahnenNr) {
+    if (nr < 2 || nr % 2 !== 0) continue;
+    let motherId = null;
+    for (const [mid, mnr] of ahnenNr) { if (mnr === nr + 1) { motherId = mid; break; } }
+    addSlot(id, motherId);
+  }
+  // Lone odd-nr ancestors (mother without father in tree).
+  for (const [id, nr] of ahnenNr) {
+    if (nr < 2 || nr % 2 !== 1 || satelliteOf.has(id) || isAnchor.has(id)) continue;
+    addSlot(id, null);
+  }
+
+  // childSlotsOfAnchor for ancestor chain.
+  for (const [id, nr] of ahnenNr) {
+    if (nr < 2) continue;
+    const childNr = Math.floor(nr / 2);
+    let childId = null;
+    for (const [cid, cnr] of ahnenNr) { if (cnr === childNr) { childId = cid; break; } }
+    if (!childId) continue;
+    if (nr % 2 === 0) {
+      // Father is anchor; owns the drop to child.
+      const arr = childSlotsOfAnchor.get(id) || [];
+      if (!arr.includes(childId)) arr.push(childId);
+      childSlotsOfAnchor.set(id, arr);
+    } else {
+      // Mother is anchor only if her father-counterpart is absent.
+      const fatherAbsent = !([...ahnenNr.values()].includes(nr - 1));
+      if (fatherAbsent) {
+        const arr = childSlotsOfAnchor.get(id) || [];
+        if (!arr.includes(childId)) arr.push(childId);
+        childSlotsOfAnchor.set(id, arr);
+      }
+    }
+  }
+
+  // Slots and childSlotsOfAnchor for ego and descendants.
+  const processDesc = id => {
+    const kids = (childOf.get(id) || []).filter(k => connected.has(k) && !ahnenSet.has(k));
+    if (!isAnchor.has(id) && !satelliteOf.has(id)) {
+      // Pair ego/each descendant with their first non-ancestor connected spouse.
+      const sp = [...(spouseOf.get(id) || [])].find(s => connected.has(s) && !ahnenSet.has(s));
+      addSlot(id, sp || null);
+    }
+    if (kids.length) {
+      const arr = childSlotsOfAnchor.get(id) || [];
+      for (const k of kids) if (!arr.includes(k)) arr.push(k);
+      childSlotsOfAnchor.set(id, arr);
+    }
+    for (const k of kids) processDesc(k);
+  };
+  processDesc(egoId);
+
+  // Catch-all: any placed person without a slot yet.
+  for (const id of pos.keys()) {
+    if (!slotByAnchor.has(id) && !satelliteOf.has(id)) addSlot(id, null);
+  }
+
+  // Build nodes and posById.
+  const nodes = [];
+  const posById = new Map();
+  for (const [id, { cx, cy }] of pos) {
+    const p = personById.get(id); if (!p) continue;
+    const x = Math.round(cx - NODE_W / 2), y = Math.round(cy - AVATAR_R);
+    const n = { id, person: p, x, y, w: NODE_W, h: NODE_H, cx: x + NODE_W / 2, cy: y + AVATAR_R };
+    nodes.push(n); posById.set(id, n);
+  }
+
+  // Orphans (not in connected) placed in a 4-column grid to the right.
+  const orphans = state.persons.filter(p => !connected.has(p.id));
+  const treeMaxCx = nodes.length ? Math.max(...nodes.map(n => n.cx)) : marginL;
+  const orphanBase = treeMaxCx + ORPHAN_GAP;
+  for (let i = 0; i < orphans.length; i++) {
+    const col = i % 4, row = Math.floor(i / 4);
+    const cx = orphanBase + col * (NODE_W + SIBLING_GAP);
+    const cy = marginT + row * ROW_H;
+    const p = orphans[i];
+    const x = Math.round(cx - NODE_W / 2), y = Math.round(cy - AVATAR_R);
+    const n = { id: p.id, person: p, x, y, w: NODE_W, h: NODE_H, cx: x + NODE_W / 2, cy: y + AVATAR_R };
+    nodes.push(n); posById.set(p.id, n);
+    addSlot(p.id, null);
+  }
+
+  // Shift all nodes so minX=marginL, minY=marginT.
+  if (nodes.length) {
+    const shiftX = marginL - Math.min(...nodes.map(n => n.x));
+    const shiftY = marginT - Math.min(...nodes.map(n => n.y));
+    for (const n of nodes) { n.x += shiftX; n.cx += shiftX; n.y += shiftY; n.cy += shiftY; }
+    for (const [, sp] of slotPosMap) {
+      sp.anchorCx += shiftX; sp.y += shiftY; sp.slotLeftX += shiftX;
+      for (const [k, v] of sp.satCx) sp.satCx.set(k, v + shiftX);
+    }
+  }
+
+  // Links (shape required by return contract; not read by renderTree edge-draw code).
+  const links = [];
+  for (const e of state.edges) {
+    const a = posById.get(e.from_id), b = posById.get(e.to_id);
+    if (a && b) links.push({ e, a, b });
+  }
+
+  const totalW = (nodes.length ? Math.max(...nodes.map(n => n.x + n.w)) : marginL) + marginR;
+  const totalH = (nodes.length ? Math.max(...nodes.map(n => n.y + n.h)) : marginT) + 60;
+
+  // Simple overlap check (3 label-line clearance, matching the legacy constant).
+  const overlaps = [];
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i], b = nodes[j];
+      if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h + 54 && b.y < a.y + a.h + 54) {
+        overlaps.push({ a: a.id, b: b.id, aName: primaryNameOf(a.person), bName: primaryNameOf(b.person) });
+      }
+    }
+  }
+  if (overlaps.length) console.warn(`[pedigree] ${overlaps.length} overlap(s)`, overlaps.slice(0, 5));
+
+  return {
+    nodes, links, posById,
+    slotByAnchor, slotPos: slotPosMap, childSlotsOfAnchor, satelliteOf,
+    forcedSatelliteOf: new Map(), parentOf, primaryPartnerOf: new Map(), isAnchor,
+    upstreamNodes: [], upstreamSpouseKeys: new Set(),
+    upstreamParentEdgeKeys: new Set(), wantedUpstreamSpouseKeys: new Set(),
+    spouseEdges, overlaps, totalW, totalH, marginL, marginT,
+  };
+}
+
+function computeLayout() {
+  if (!state.persons.length) return null;
+
+  const rels = buildRelMaps(state);
+  const useLegacy = new URLSearchParams(location.search).get('layout') === 'legacy';
+  if (!useLegacy) {
+    try { return computePedigreeLayout(state, rels); }
+    catch(e) { console.warn('[layout] pedigree failed, fallback to legacy:', e); }
+  }
+
+  const { parentOf, childOf, spouseOf, spouseEdges } = rels;
 
   const personById = new Map(state.persons.map(p => [p.id, p]));
 
