@@ -32,6 +32,8 @@ import * as mastodon from './sources/mastodon.js';
 import * as googlecse from './sources/googlecse.js';
 import * as zlb_adressbuecher from './sources/zlb_adressbuecher.js';
 import * as landesarchiv_berlin from './sources/landesarchiv_berlin.js';
+import * as landesarchiv_nrw from './sources/landesarchiv_nrw.js';
+import * as archive_de from './sources/archive_de.js';
 import * as trauer from './sources/trauer.js';
 import * as gedenkseiten from './sources/gedenkseiten.js';
 import * as onlinegedenken from './sources/onlinegedenken.js';
@@ -78,6 +80,8 @@ export const SOURCES = {
   // --- Deutsche Archive & Nachrufe (Firecrawl-ready) -----------------------
   zlb_adressbuecher:   { label: 'Berliner Adressbuecher 1799-1943 (ZLB)', impl: zlb_adressbuecher.search, active: true, note: 'nur bei Berlin-Bezug' },
   landesarchiv_berlin: { label: 'Landesarchiv Berlin',                     impl: landesarchiv_berlin.search, active: true, timeout: 75_000, note: 'Session-Suche, langsam (bis 60s)' },
+  landesarchiv_nrw:    { label: 'Landesarchiv NRW',                        impl: landesarchiv_nrw.search, active: !!process.env.FIRECRAWL_URL, timeout: 90_000, note: process.env.FIRECRAWL_URL ? 'Volltextsuche archive.nrw.de über Firecrawl' : 'braucht FIRECRAWL_URL' },
+  archive_de:          { label: 'Deutsche Archive (12 BL + Bundesarchiv)', impl: archive_de.search, active: true, timeout: 90_000, note: 'Firecrawl-Suche je BL-Portal + Direkt-Hinweise' },
   trauer:              { label: 'Trauer.de (Nachrufe)',                    impl: trauer.search, active: true, note: 'nur nach 1990' },
   gedenkseiten:        { label: 'Gedenkseiten.de',                         impl: gedenkseiten.search, active: true, note: 'nur nach 1990' },
   onlinegedenken:      { label: 'Online Gedenken',                         impl: onlinegedenken.search, active: true, note: 'nur nach 1990' },
