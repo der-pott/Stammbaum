@@ -702,8 +702,20 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
   background: var(--paper);
   align-items: start;
 }
-.hit[data-status="accepted"], .hit[data-status="applied"] { background: color-mix(in oklch, var(--paper-raised) 85%, var(--gold) 15%); }
+.hit[data-status="accepted"], .hit[data-status="applied"] {
+  background: color-mix(in oklch, var(--paper-raised) 80%, var(--seal) 20%);
+  border-color: var(--seal);
+}
 .hit[data-status="imported"] { background: color-mix(in oklch, var(--paper-raised) 85%, var(--seal) 15%); }
+.btn-outline.btn-accept { color: var(--seal); border-color: var(--seal); }
+.btn-outline.btn-accept:hover { background: color-mix(in oklch, var(--seal) 15%, var(--paper)); }
+.hit-badge-accepted {
+  display: inline-block;
+  color: var(--seal); font-size: 11px; font-weight: 600;
+  padding: 4px 8px; border-radius: 999px;
+  background: color-mix(in oklch, var(--seal) 10%, var(--paper));
+  border: 1px solid var(--seal);
+}
 .hit[data-status="dismiss"] { opacity: 0.5; }
 .hit-image { grid-template-columns: 48px 120px 1fr auto; }
 .hit-image-thumb { display: block; width: 120px; height: 120px; border-radius: var(--radius-sm); overflow: hidden; border: 1px solid var(--line); background: var(--paper-raised); }

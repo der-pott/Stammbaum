@@ -148,6 +148,20 @@ export async function search(person) {
   const bPlace = (person.birth_place || '').toLowerCase();
   const dPlace = (person.death_place || '').toLowerCase();
 
+  // Confirmed-Aware Scoring: User-bestätigte Treffer liefern Vertrauens-Anker.
+  // Domains die schon bestätigt wurden → Vertrauensbonus für neue Treffer.
+  // Keywords aus bestätigten Snippets → Treffer die sie teilen bekommen Boost.
+  const verifiedHosts = new Set((person.verified_facts || [])
+    .map(v => { try { return new URL(v.url).host.replace(/^www\./, ''); } catch { return null; } })
+    .filter(Boolean));
+  const verifiedKeywords = new Set();
+  for (const v of (person.verified_facts || [])) {
+    const blob = ((v.title || '') + ' ' + (v.snippet || '') + ' ' + (v.markdown || '')).toLowerCase();
+    // Extrahiere Wörter mit ≥5 Zeichen, filtere Stop-Wörter grob
+    const words = blob.match(/[a-zäöüß]{5,}/gi) || [];
+    for (const w of words.slice(0, 200)) verifiedKeywords.add(w.toLowerCase());
+  }
+
   const ranked = Array.from(byUrl.values()).map(entry => {
     const text = ((entry.snippet || '') + ' ' + (entry.title || '')).toLowerCase();
     let score = 0.3 + Math.min(0.4, (entry.matches - 1) * 0.1);
@@ -157,6 +171,16 @@ export async function search(person) {
     if (dPlace.length > 2 && text.includes(dPlace)) score += 0.1;
     for (const r of residences) if (r.length > 2 && text.includes(r)) { score += 0.1; break; }
     for (const e of employers) if (e.length > 2 && text.includes(e)) { score += 0.1; break; }
+    // Verified-Boost: gleiche Domain wie ein bestätigter Treffer → +0.2
+    const entryHost = hostOf(entry.url).replace(/^www\./, '');
+    if (entryHost && verifiedHosts.has(entryHost)) { score += 0.2; entry.verified_domain = true; }
+    // Verified-Keyword-Overlap: wie viele Keywords teilt der Treffer mit bestätigten?
+    if (verifiedKeywords.size) {
+      let overlap = 0;
+      const textWords = text.match(/[a-zäöüß]{5,}/gi) || [];
+      for (const w of textWords) if (verifiedKeywords.has(w.toLowerCase())) overlap += 1;
+      if (overlap >= 3) { score += Math.min(0.15, overlap * 0.02); entry.verified_overlap = overlap; }
+    }
     entry.confidence = Math.min(1, score);
     return entry;
   }).sort((a, b) => b.confidence - a.confidence);
@@ -180,6 +204,8 @@ export async function search(person) {
       queries: entry.queries.slice(0, 6),
     };
     if (md) payload.markdown = md;
+    if (entry.verified_domain) payload.verified_domain = true;
+    if (entry.verified_overlap) payload.verified_overlap = entry.verified_overlap;
     return {
       source: 'web_dossier',
       title: (entry.title || entry.url).slice(0, 140),

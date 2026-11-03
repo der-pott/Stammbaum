@@ -34,6 +34,18 @@ async function processJob(job) {
   try {
     person.education = db.prepare('SELECT institution, field, place FROM education WHERE person_id=?').all(job.person_id);
   } catch { person.education = []; }
+  try {
+    person.residences = db.prepare('SELECT place, city, region, country FROM residences WHERE person_id=?').all(job.person_id);
+  } catch { person.residences = []; }
+  try {
+    const vrows = db.prepare(`SELECT source, url, title, snippet, payload FROM research_hits
+      WHERE person_id=? AND status IN ('accepted','applied','imported') ORDER BY created_at DESC LIMIT 20`).all(job.person_id);
+    person.verified_facts = vrows.map(r => {
+      let p = null; try { p = JSON.parse(r.payload || 'null'); } catch { /* ignore */ }
+      return { source: r.source, url: r.url, title: r.title, snippet: r.snippet,
+        markdown: p?.markdown ? p.markdown.slice(0, 2000) : null };
+    });
+  } catch { person.verified_facts = []; }
   const sourceKeys = JSON.parse(job.sources || '[]');
   const statuses = {};
   for (const k of sourceKeys) statuses[k] = { state: 'queued', count: 0 };

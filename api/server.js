@@ -800,12 +800,26 @@ function gatherBioContext(personId) {
     WHERE pi.person_id=? AND i.caption IS NOT NULL
   `).all(personId).map(r => [r.role, r.caption].filter(Boolean).join(': '));
 
+  // User-bestätigte Treffer: harter Wahrheits-Anker für Research + AI-Review.
+  const verifiedRows = db.prepare(`
+    SELECT source, url, title, snippet, confidence, payload
+    FROM research_hits
+    WHERE person_id=? AND status IN ('accepted','applied','imported')
+    ORDER BY created_at DESC
+    LIMIT 40
+  `).all(personId);
+  const verifiedFacts = verifiedRows.map(r => {
+    let p = null; try { p = JSON.parse(r.payload || 'null'); } catch { /* ignore */ }
+    return { source: r.source, url: r.url, title: r.title, snippet: r.snippet,
+      markdown: p?.markdown ? p.markdown.slice(0, 4000) : null };
+  });
+
   // Web-Dossier-Volltexte (nur solche mit markdown im payload) + sonstige Snippets
   // für die AI-Review. Markdown wird gründlich gelesen, Snippets nur als Hinweise.
   const hitRows = db.prepare(`
     SELECT source, url, title, snippet, confidence, payload
     FROM research_hits
-    WHERE person_id=? AND status != 'dismissed'
+    WHERE person_id=? AND status NOT IN ('dismissed','accepted','applied','imported')
     ORDER BY confidence DESC NULLS LAST, created_at DESC
     LIMIT 60
   `).all(personId);
@@ -832,7 +846,7 @@ function gatherBioContext(personId) {
   const trimmedWebContent = webContent.slice(0, 6);
   const trimmedWebSnippets = webSnippets.slice(0, 20);
   return { person, parents, spouses, children, siblings, jobs, education, residences, anecdotes, military, health, lifeEvents, docCaptions,
-    webContent: trimmedWebContent, webSnippets: trimmedWebSnippets };
+    webContent: trimmedWebContent, webSnippets: trimmedWebSnippets, verifiedFacts };
 }
 
 app.get('/api/persons/:id/biography', requireViewer, (req, res) => {
@@ -1337,7 +1351,22 @@ app.post('/api/persons/:id/research/scrape-source/:key', requireEditor, aiLimite
   if (!person) return res.status(404).json({ error: 'person not found' });
   const key = req.params.key;
   if (!SOURCES[key]) return res.status(400).json({ error: 'unknown source' });
-  const useCache = req.body?.use_cache !== false;
+  // Enrich person with structured sub-resources AND verified facts (user-accepted
+  // hits), so sources like web_dossier can boost results matching confirmed truth.
+  try { person.jobs = db.prepare('SELECT title, employer, place FROM jobs WHERE person_id=?').all(req.params.id); } catch { person.jobs = []; }
+  try { person.education = db.prepare('SELECT institution, field, place FROM education WHERE person_id=?').all(req.params.id); } catch { person.education = []; }
+  try { person.residences = db.prepare('SELECT place, city, region, country FROM residences WHERE person_id=?').all(req.params.id); } catch { person.residences = []; }
+  try {
+    const vrows = db.prepare(`SELECT source, url, title, snippet, payload FROM research_hits
+      WHERE person_id=? AND status IN ('accepted','applied','imported') ORDER BY created_at DESC LIMIT 20`).all(req.params.id);
+    person.verified_facts = vrows.map(r => {
+      let p = null; try { p = JSON.parse(r.payload || 'null'); } catch { /* ignore */ }
+      return { source: r.source, url: r.url, title: r.title, snippet: r.snippet,
+        markdown: p?.markdown ? p.markdown.slice(0, 2000) : null };
+    });
+  } catch { person.verified_facts = []; }
+  // Fresh cache for sources that read verified_facts (confidence re-weighting needs re-run)
+  const useCache = req.body?.use_cache !== false && !person.verified_facts.length;
   try {
     const result = await runSingleSource(key, person, { useCache });
     const now = nowIso();
@@ -1376,10 +1405,11 @@ app.post('/api/research/hits/:id/apply', requireEditor, (req, res) => {
   const hit = db.prepare('SELECT * FROM research_hits WHERE id=?').get(req.params.id);
   if (!hit) return res.status(404).json({ error: 'hit not found' });
   const action = String(req.body?.action || '').trim();
-  if (!['accept','dismiss','add_source_note'].includes(action)) {
+  if (!['accept','dismiss','add_source_note','reset'].includes(action)) {
     return res.status(400).json({ error: 'invalid action' });
   }
   let newStatus = action;
+  if (action === 'reset') newStatus = 'pending';
   if (action === 'add_source_note' && hit.person_id) {
     // append a short line to the person's notes
     const p = db.prepare('SELECT notes FROM persons WHERE id=?').get(hit.person_id);

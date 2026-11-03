@@ -2904,8 +2904,12 @@ function renderHit(hit, personId) {
       ),
     ),
     state.role === 'editor' && (hit.status === 'pending' || !hit.status) ? h('div', { class: 'hit-actions' },
+      btnOutline('✓ Bestätigen', async () => { await api.applyHit(hit.id, 'accept'); await loadResearchHits(personId); }, 'small btn-accept'),
       btnOutline('Notiz', async () => { await api.applyHit(hit.id, 'add_source_note'); await loadResearchHits(personId); await reload(); }, 'small'),
       btnOutline('Verwerfen', async () => { await api.applyHit(hit.id, 'dismiss'); await loadResearchHits(personId); }, 'small btn-danger'),
+    ) : state.role === 'editor' && hit.status === 'accepted' ? h('div', { class: 'hit-actions' },
+      h('div', { class: 'hit-badge-accepted' }, '✓ bestätigt'),
+      btnOutline('Zurücknehmen', async () => { await api.applyHit(hit.id, 'reset'); await loadResearchHits(personId); }, 'small'),
     ) : h('div'),
   );
   return row;
@@ -2914,7 +2918,7 @@ function renderHit(hit, personId) {
 function renderImageHit(hit, personId, payload) {
   const row = h('div', { class: 'hit hit-image', 'data-status': hit.status || 'pending' });
   const thumb = h('a', { href: payload.page_url || hit.url, target: '_blank', rel: 'noopener', class: 'hit-image-thumb' },
-    h('img', { src: payload.image_url, alt: hit.title || 'Bild', loading: 'lazy', referrerpolicy: 'no-referrer' }),
+    h('img', { src: payload.thumb_url || payload.image_url, alt: hit.title || 'Bild', loading: 'lazy', referrerpolicy: 'no-referrer' }),
   );
   const dims = payload.width && payload.height ? ` · ${payload.width}×${payload.height}` : '';
   const info = h('div', { class: 'hit-main' },
@@ -2936,7 +2940,7 @@ function renderImageHit(hit, personId, payload) {
         await loadResearchHits(personId);
         await reload();
       } catch (e) { alert('Fehler: ' + e.message); ev.currentTarget.disabled = false; }
-    }, 'small'));
+    }, 'small btn-accept'));
     actions.appendChild(btnOutline('Übernehmen', async (ev) => {
       const role = prompt('Rolle für dieses Bild (z. B. Foto, Portrait, Nachruf, Urkunde):', 'Foto');
       if (!role) return;
