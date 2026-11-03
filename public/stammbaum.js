@@ -2314,7 +2314,7 @@ function renderDetail() {
       const btn = btnOutline('✨ KI-Vollrecherche', () => openAiResearchDialog(p.id, p));
       if (!eligible) {
         btn.disabled = true;
-        btn.title = 'Mindestens Vor- und Nachname plus drei weitere Angaben (Lebensdaten, Ort, Eltern, Wohnsitz, Beruf oder Notizen) nötig.';
+        btn.title = 'Mindestens Vor- und Nachname nötig.';
       }
       actions.appendChild(btn);
     })();
@@ -4177,16 +4177,9 @@ function wireAiReviewHandlers() {
 
 // --- KI-Vollrecherche start ---
 
-function fullResearchEligible(p, lists) {
-  if (!p.given_name || !p.surname) return false;
-  let n = 0;
-  if (p.birth_date) n++;
-  if (p.death_date) n++;
-  if (p.birth_place) n++;
-  if (p.death_place) n++;
-  if ((lists.parents || []).length >= 1) n++;
-  if (p.notes && p.notes.trim().length > 0) n++;
-  return n >= 3;
+function fullResearchEligible(p /* , lists */) {
+  // Minimum: Vor- und Nachname. Fehlende Lebensdaten -> Yearspan-Dialog.
+  return !!(p.given_name && p.surname);
 }
 
 const _aiResearch = { reviewId: null, suggestions: null, personId: null };
