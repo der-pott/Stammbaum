@@ -522,7 +522,7 @@ function select(id) {
 const NODE_W = 128;    // card width (avatar centered)
 const AVATAR_R = 36;   // circular portrait radius
 const NODE_H = 150;    // avatar + name + dates (base; wrapped names may extend further)
-const SIBLING_GAP = 16;
+const SIBLING_GAP = 32;
 const COUPLE_GAP = 56;  // ❤-filled gap between spouses
 const FAMILY_GAP = 56;  // between adjacent sibling groups
 const ROW_H = 260;      // vertical gap between generations (room for 2–3 wrapped name lines)
