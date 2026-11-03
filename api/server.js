@@ -1399,6 +1399,50 @@ app.post('/api/research/hits/:id/apply', requireEditor, (req, res) => {
 
 function safeJson(s) { try { return JSON.parse(s || 'null'); } catch { return null; } }
 
+// Import a web-image hit into the person's gallery. Fetches image_url, stores
+// as blob, links via person_images, optionally sets as portrait.
+app.post('/api/research/hits/:id/import-image', requireEditor, async (req, res) => {
+  const hit = db.prepare('SELECT * FROM research_hits WHERE id=?').get(req.params.id);
+  if (!hit) return res.status(404).json({ error: 'hit not found' });
+  const payload = safeJson(hit.payload) || {};
+  const imageUrl = payload.image_url;
+  if (!imageUrl) return res.status(400).json({ error: 'hit has no image_url' });
+  const role = String(req.body?.role || 'Foto').slice(0, 80).trim() || 'Foto';
+  const setAsPortrait = !!req.body?.set_as_portrait;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 15_000);
+    const r = await fetch(imageUrl, { signal: ctrl.signal, redirect: 'follow',
+      headers: { 'user-agent': 'Stammbaum/1.0 (private family research)', 'accept': 'image/*' } });
+    clearTimeout(t);
+    if (!r.ok) return res.status(502).json({ error: `Download fehlgeschlagen (HTTP ${r.status})` });
+    const mime = (r.headers.get('content-type') || 'image/jpeg').split(';')[0].trim();
+    if (!/^image\//.test(mime)) return res.status(400).json({ error: `kein Bild (${mime})` });
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length > 15 * 1024 * 1024) return res.status(413).json({ error: 'Bild über 15 MB' });
+    const imageId = newId();
+    const now = nowIso();
+    const caption = `${hit.title || 'Web-Fund'} (Quelle: ${payload.page_url || hit.url || hit.source})`.slice(0, 500);
+    writeFileSync(pathJoin(IMAGES_DIR, imageId), buf);
+    const effectiveRole = setAsPortrait ? 'Portrait' : role;
+    db.transaction(() => {
+      db.prepare('INSERT INTO images (id, mime, bytes, caption, taken_at, created_at) VALUES (?,?,?,?,?,?)')
+        .run(imageId, mime, buf.length, caption, null, now);
+      if (setAsPortrait) {
+        db.prepare(`UPDATE person_images SET role='Foto' WHERE person_id=? AND role='Portrait'`).run(hit.person_id);
+      }
+      db.prepare('INSERT INTO person_images (person_id, image_id, role, created_at) VALUES (?,?,?,?)')
+        .run(hit.person_id, imageId, effectiveRole, now);
+    })();
+    db.prepare('UPDATE research_hits SET status=? WHERE id=?').run('imported', req.params.id);
+    logAudit(req.auth.role, 'research.import_image', `${req.params.id} → image=${imageId} role=${role}`);
+    res.json({ image_id: imageId, role, set_as_portrait: setAsPortrait });
+  } catch (err) {
+    console.error('import-image failed:', err?.message);
+    res.status(502).json({ error: err?.message || 'import fehlgeschlagen' });
+  }
+});
+
 /* recycle bin ----------------------------------------------------------- */
 
 const SOFT_DELETE_RESOURCES = {

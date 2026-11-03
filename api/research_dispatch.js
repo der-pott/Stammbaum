@@ -38,6 +38,7 @@ import * as onlinegedenken from './sources/onlinegedenken.js';
 import * as geneanet from './sources/geneanet.js';
 import * as europeana from './sources/europeana.js';
 import * as web_dossier from './sources/web_dossier.js';
+import * as web_images from './sources/web_images.js';
 import { activeBackend } from './search_backend.js';
 
 const WEB_SEARCH_AVAILABLE = !!activeBackend();
@@ -47,6 +48,7 @@ if (!WEB_SEARCH_AVAILABLE) {
 
 export const SOURCES = {
   web_dossier:   { label: 'Web-Dossier (Multi-Query + Deep-Scrape)', impl: web_dossier.search, active: true, timeout: 90_000, note: WEB_SEARCH_AVAILABLE ? 'bis zu 12 Queries, Firecrawl-Volltext der Top-5' : 'braucht BRAVE_SEARCH_API_KEY oder GOOGLE_CSE_API_KEY' },
+  web_images:    { label: 'Bild-Recherche (Firecrawl)',            impl: web_images.search, active: !!process.env.FIRECRAWL_URL, timeout: 60_000, note: process.env.FIRECRAWL_URL ? 'bis zu 8 Image-Queries, dedupe + Multi-Match-Scoring' : 'braucht FIRECRAWL_URL' },
   wikidata:      { label: 'Wikidata / Wikipedia (DE)', impl: wikidata.search, active: true },
   familysearch:  { label: 'FamilySearch (öffentlich)',   impl: familysearch.search, active: true },
   archion:       { label: 'Archion (ev. Kirchenbücher)', impl: archion.search, active: true, note: 'Paywall' },

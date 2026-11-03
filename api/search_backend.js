@@ -13,9 +13,13 @@ const UA = 'Stammbaum/1.0 (private family research; contact: maximilian.pott@out
 const DEFAULT_TIMEOUT = 10_000;
 
 // Backend selection ------------------------------------------------------
+// Priority: Brave > Serper > Firecrawl (self-hosted) > Google CSE.
+// Firecrawl rangiert vor CSE weil CSE project-level auth-Probleme häufig
+// vorkommen und Firecrawl auf dem eigenen VPS stabil erreichbar ist.
 export function activeBackend() {
   if (process.env.BRAVE_SEARCH_API_KEY) return 'brave';
   if (process.env.SERPER_API_KEY) return 'serper';
+  if (process.env.FIRECRAWL_URL) return 'firecrawl';
   if (process.env.GOOGLE_CSE_API_KEY && process.env.GOOGLE_CSE_CX) return 'googlecse';
   return null;
 }
@@ -34,8 +38,8 @@ export function missingBackendInfo() {
 }
 
 // Rate limit: 1 req/s on Brave free tier
-const NEXT_ALLOWED = { brave: 0, serper: 0, googlecse: 0 };
-const INTERVAL_MS = { brave: 1100, serper: 500, googlecse: 400 };
+const NEXT_ALLOWED = { brave: 0, serper: 0, googlecse: 0, firecrawl: 0 };
+const INTERVAL_MS = { brave: 1100, serper: 500, googlecse: 400, firecrawl: 250 };
 
 async function waitRateLimit(backend) {
   const now = Date.now();
@@ -84,6 +88,11 @@ export async function webSearch(opts) {
     }
     if (backend === 'googlecse') {
       const hits = await googleCseSearch(q, { gl: (opts.country || 'DE').toLowerCase(), limit });
+      logSearch(backend, q, 200, Date.now() - start, null);
+      return { ok: true, backend, hits };
+    }
+    if (backend === 'firecrawl') {
+      const hits = await firecrawlSearch(q, { limit });
       logSearch(backend, q, 200, Date.now() - start, null);
       return { ok: true, backend, hits };
     }
@@ -179,6 +188,77 @@ async function googleCseSearch(q, { gl, limit }) {
       url: r.link || '',
       snippet: r.snippet || '',
     }));
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// Firecrawl self-hosted search ------------------------------------------
+async function firecrawlSearch(q, { limit }) {
+  const baseUrl = process.env.FIRECRAWL_URL;
+  const key = process.env.FIRECRAWL_API_KEY || '';
+  const endpoint = baseUrl.replace(/\/+$/, '') + '/v1/search';
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT);
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(key ? { 'Authorization': `Bearer ${key}` } : {}),
+        'User-Agent': UA,
+      },
+      body: JSON.stringify({ query: q, limit: Math.min(limit, 20) }),
+    });
+    if (!res.ok) throw new Error(`Firecrawl HTTP ${res.status}`);
+    const payload = await res.json();
+    const results = payload?.data || payload?.results || [];
+    return results.map(r => ({
+      title: r.title || r.name || '',
+      url: r.url || r.link || '',
+      snippet: r.description || r.snippet || '',
+    }));
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// Firecrawl image search — queries /v1/search with sources=['images'].
+// Returns {title, url, image_url, snippet}.
+export async function firecrawlImageSearch(q, { limit = 12 } = {}) {
+  const baseUrl = process.env.FIRECRAWL_URL;
+  if (!baseUrl) return [];
+  const key = process.env.FIRECRAWL_API_KEY || '';
+  const endpoint = baseUrl.replace(/\/+$/, '') + '/v1/search';
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT);
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(key ? { 'Authorization': `Bearer ${key}` } : {}),
+        'User-Agent': UA,
+      },
+      body: JSON.stringify({ query: q, limit: Math.min(limit, 30), sources: ['images'] }),
+    });
+    if (!res.ok) return [];
+    const payload = await res.json();
+    // Firecrawl image response: { data: { images: [{title,url,imageUrl,imageWidth,imageHeight,snippet}] } }
+    const items = payload?.data?.images || payload?.data?.image_results || payload?.data || [];
+    const list = Array.isArray(items) ? items : [];
+    return list.map(r => ({
+      title: r.title || r.name || '',
+      page_url: r.url || r.link || r.pageUrl || '',
+      image_url: r.imageUrl || r.image_url || r.thumbnailUrl || '',
+      snippet: r.description || r.snippet || '',
+      width: r.imageWidth || r.width || null,
+      height: r.imageHeight || r.height || null,
+    })).filter(r => r.image_url);
+  } catch {
+    return [];
   } finally {
     clearTimeout(t);
   }

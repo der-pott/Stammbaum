@@ -95,6 +95,9 @@ const api = {
   async listHits(person_id) {
     return j(await fetch(`/api/persons/${person_id}/research/hits`));
   },
+  async importResearchImage(hit_id, role, setAsPortrait) {
+    return j(await fetch(`/api/research/hits/${hit_id}/import-image`, postJson({ role, set_as_portrait: !!setAsPortrait })));
+  },
   async applyHit(hit_id, action) {
     return j(await fetch(`/api/research/hits/${hit_id}/apply`, postJson({ action })));
   },
@@ -2883,6 +2886,9 @@ function renderProgressGrid(job) {
 }
 
 function renderHit(hit, personId) {
+  const payload = hit.payload || {};
+  const isImage = payload.is_image && payload.image_url;
+  if (isImage) return renderImageHit(hit, personId, payload);
   const row = h('div', { class: 'hit', 'data-status': hit.status || 'pending' },
     h('div', { class: 'hit-src' }, (hit.source || '').toUpperCase()),
     h('div', { class: 'hit-main' },
@@ -2902,6 +2908,51 @@ function renderHit(hit, personId) {
       btnOutline('Verwerfen', async () => { await api.applyHit(hit.id, 'dismiss'); await loadResearchHits(personId); }, 'small btn-danger'),
     ) : h('div'),
   );
+  return row;
+}
+
+function renderImageHit(hit, personId, payload) {
+  const row = h('div', { class: 'hit hit-image', 'data-status': hit.status || 'pending' });
+  const thumb = h('a', { href: payload.page_url || hit.url, target: '_blank', rel: 'noopener', class: 'hit-image-thumb' },
+    h('img', { src: payload.image_url, alt: hit.title || 'Bild', loading: 'lazy', referrerpolicy: 'no-referrer' }),
+  );
+  const dims = payload.width && payload.height ? ` · ${payload.width}×${payload.height}` : '';
+  const info = h('div', { class: 'hit-main' },
+    h('div', { class: 'hit-title' }, hit.title || 'Bild'),
+    h('div', { class: 'hit-snippet' }, (hit.snippet || '') + dims),
+    h('div', { class: 'hit-conf' },
+      h('div', { class: 'hit-conf-bar' },
+        h('div', { class: 'hit-conf-fill', style: `width:${Math.round((hit.confidence || 0) * 100)}%` }),
+      ),
+      h('span', {}, Math.round((hit.confidence || 0) * 100) + '%'),
+    ),
+  );
+  const actions = h('div', { class: 'hit-actions' });
+  if (state.role === 'editor' && (hit.status === 'pending' || !hit.status)) {
+    actions.appendChild(btnOutline('Als Portrait', async (ev) => {
+      ev.currentTarget.disabled = true;
+      try {
+        await api.importResearchImage(hit.id, 'Portrait', true);
+        await loadResearchHits(personId);
+        await reload();
+      } catch (e) { alert('Fehler: ' + e.message); ev.currentTarget.disabled = false; }
+    }, 'small'));
+    actions.appendChild(btnOutline('Übernehmen', async (ev) => {
+      const role = prompt('Rolle für dieses Bild (z. B. Foto, Portrait, Nachruf, Urkunde):', 'Foto');
+      if (!role) return;
+      ev.currentTarget.disabled = true;
+      try {
+        await api.importResearchImage(hit.id, role, false);
+        await loadResearchHits(personId);
+        await reload();
+      } catch (e) { alert('Fehler: ' + e.message); ev.currentTarget.disabled = false; }
+    }, 'small'));
+    actions.appendChild(btnOutline('Verwerfen', async () => { await api.applyHit(hit.id, 'dismiss'); await loadResearchHits(personId); }, 'small btn-danger'));
+  }
+  row.appendChild(h('div', { class: 'hit-src' }, 'BILD'));
+  row.appendChild(thumb);
+  row.appendChild(info);
+  row.appendChild(actions);
   return row;
 }
 
