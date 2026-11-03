@@ -92,8 +92,13 @@ export async function search(person) {
     }];
   }
 
-  const queries = buildQueries(person);
-  const perQuery = await Promise.all(queries.map(q => webSearch({ query: q, country: 'DE', limit: 6 })));
+  const queries = buildQueries(person).slice(0, 5);
+  // Sequentiell gegen Firecrawl's Rate-Cap
+  const perQuery = [];
+  for (const q of queries) {
+    const r = await webSearch({ query: q, country: 'DE', limit: 6 });
+    perQuery.push(r);
+  }
 
   // Dedupe candidate URLs across queries, score by multi-match
   const urlScore = new Map();

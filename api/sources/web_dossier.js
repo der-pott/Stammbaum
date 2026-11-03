@@ -57,15 +57,27 @@ function buildQueries(person) {
   // Generic dossier queries that often surface bios, articles, interviews.
   queries.add(`${name} Biografie`);
   queries.add(`${name} Lebenslauf`);
-  queries.add(`${name} Verein OR Verband OR Stiftung`);
-  // Return as array, cap at 12 queries to avoid quota explosion.
-  return Array.from(queries).slice(0, 12);
+  // Cap at 6 queries. Firecrawl self-hosted läuft über diese Schwelle in
+  // Rate-Caps und droppt still.
+  return Array.from(queries).slice(0, 6);
 }
 
 async function runSingleQuery(q) {
   const r = await webSearch({ query: q, country: 'DE', limit: 8 });
   if (!r.ok) return [];
   return r.hits || [];
+}
+
+// Sequentiell statt Promise.all — Firecrawl self-hosted dropt bei 3+ parallel
+// Queries still Richtung Empty-Response. Sequentieller Durchlauf mit
+// webSearch's eigenem Rate-Limit (1500ms) ergibt stabile Treffer.
+async function runQueriesSequential(queries) {
+  const out = [];
+  for (const q of queries) {
+    const hits = await runSingleQuery(q);
+    out.push({ q, hits });
+  }
+  return out;
 }
 
 function hostOf(url) { try { return new URL(url).host; } catch { return ''; } }
@@ -89,8 +101,8 @@ export async function search(person) {
   const queries = buildQueries(person);
   if (!queries.length) return [];
 
-  // Query-Fanout
-  const perQuery = await Promise.all(queries.map(q => runSingleQuery(q).then(hits => ({ q, hits }))));
+  // Query-Fanout — sequentiell gegen Firecrawl's Rate-Cap
+  const perQuery = await runQueriesSequential(queries);
 
   // Hat überhaupt irgendeine Query ein Backend?
   const anyBackend = perQuery.some(({ hits }) => hits.length > 0);
