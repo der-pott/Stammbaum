@@ -799,7 +799,40 @@ function gatherBioContext(personId) {
     SELECT i.caption, pi.role FROM images i JOIN person_images pi ON pi.image_id=i.id
     WHERE pi.person_id=? AND i.caption IS NOT NULL
   `).all(personId).map(r => [r.role, r.caption].filter(Boolean).join(': '));
-  return { person, parents, spouses, children, siblings, jobs, education, residences, anecdotes, military, health, lifeEvents, docCaptions };
+
+  // Web-Dossier-Volltexte (nur solche mit markdown im payload) + sonstige Snippets
+  // für die AI-Review. Markdown wird gründlich gelesen, Snippets nur als Hinweise.
+  const hitRows = db.prepare(`
+    SELECT source, url, title, snippet, confidence, payload
+    FROM research_hits
+    WHERE person_id=? AND status != 'dismissed'
+    ORDER BY confidence DESC NULLS LAST, created_at DESC
+    LIMIT 60
+  `).all(personId);
+  const webContent = [];
+  const webSnippets = [];
+  for (const r of hitRows) {
+    let p = null;
+    try { p = JSON.parse(r.payload || 'null'); } catch { p = null; }
+    const md = p && typeof p.markdown === 'string' ? p.markdown : null;
+    const base = {
+      source: r.source,
+      url: r.url,
+      title: r.title,
+      snippet: r.snippet,
+      confidence: r.confidence,
+    };
+    if (md && md.length > 200) {
+      webContent.push({ ...base, markdown: md.slice(0, 10_000) });
+    } else if (r.snippet && !/^Keine Treffer\.$|^Zugriff nicht möglich/.test(r.snippet)) {
+      webSnippets.push(base);
+    }
+  }
+  // Volltexte: max 6 — sonst Prompt-Explosion. Snippets: max 20.
+  const trimmedWebContent = webContent.slice(0, 6);
+  const trimmedWebSnippets = webSnippets.slice(0, 20);
+  return { person, parents, spouses, children, siblings, jobs, education, residences, anecdotes, military, health, lifeEvents, docCaptions,
+    webContent: trimmedWebContent, webSnippets: trimmedWebSnippets };
 }
 
 app.get('/api/persons/:id/biography', requireViewer, (req, res) => {
@@ -1131,6 +1164,98 @@ app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
       } catch (e) {
         errors.push({ bucket: 'job_updates', idx, error: e.message });
         recordItem('job_updates', idx, u, 'failed');
+      }
+    }
+
+    // 5b) new_jobs — Dedup via (title, employer) für diese Person
+    for (const idx of (accepted.new_jobs || [])) {
+      const j = suggestions.new_jobs?.[idx];
+      if (!j || (!j.title && !j.employer)) {
+        errors.push({ bucket: 'new_jobs', idx, error: 'empty' });
+        continue;
+      }
+      const existing = db.prepare(`
+        SELECT id FROM jobs WHERE person_id=?
+          AND LOWER(TRIM(COALESCE(title,'')))=LOWER(TRIM(COALESCE(?,'')))
+          AND LOWER(TRIM(COALESCE(employer,'')))=LOWER(TRIM(COALESCE(?,'')))
+        LIMIT 1
+      `).get(personId, j.title || null, j.employer || null);
+      if (existing) {
+        skipped.push({ bucket: 'new_jobs', idx, reason: 'duplicate', existing_id: existing.id });
+        recordItem('new_jobs', idx, j, 'skipped_duplicate', existing.id);
+        continue;
+      }
+      try {
+        const id = newId();
+        db.prepare(`INSERT INTO jobs (id, person_id, title, employer, start_date, end_date, place, notes, created_at)
+          VALUES (?,?,?,?,?,?,?,?,?)`)
+          .run(id, personId, j.title || null, j.employer || null, j.start_date || null, j.end_date || null, j.place || null, j.notes || null, now);
+        recordItem('new_jobs', idx, j, 'applied', id);
+        applied++;
+      } catch (e) {
+        errors.push({ bucket: 'new_jobs', idx, error: e.message });
+        recordItem('new_jobs', idx, j, 'failed');
+      }
+    }
+
+    // 5c) new_education — Dedup via (institution, field) für diese Person
+    for (const idx of (accepted.new_education || [])) {
+      const e = suggestions.new_education?.[idx];
+      if (!e || (!e.institution && !e.field)) {
+        errors.push({ bucket: 'new_education', idx, error: 'empty' });
+        continue;
+      }
+      const existing = db.prepare(`
+        SELECT id FROM education WHERE person_id=?
+          AND LOWER(TRIM(COALESCE(institution,'')))=LOWER(TRIM(COALESCE(?,'')))
+          AND LOWER(TRIM(COALESCE(field,'')))=LOWER(TRIM(COALESCE(?,'')))
+        LIMIT 1
+      `).get(personId, e.institution || null, e.field || null);
+      if (existing) {
+        skipped.push({ bucket: 'new_education', idx, reason: 'duplicate', existing_id: existing.id });
+        recordItem('new_education', idx, e, 'skipped_duplicate', existing.id);
+        continue;
+      }
+      try {
+        const id = newId();
+        db.prepare(`INSERT INTO education (id, person_id, institution, field, degree, place, start_date, end_date, notes, created_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?)`)
+          .run(id, personId, e.institution || null, e.field || null, e.degree || null, e.place || null, e.start_date || null, e.end_date || null, e.notes || null, now);
+        recordItem('new_education', idx, e, 'applied', id);
+        applied++;
+      } catch (err) {
+        errors.push({ bucket: 'new_education', idx, error: err.message });
+        recordItem('new_education', idx, e, 'failed');
+      }
+    }
+
+    // 5d) new_anecdotes — Dedup via (title, text-prefix)
+    for (const idx of (accepted.new_anecdotes || [])) {
+      const a = suggestions.new_anecdotes?.[idx];
+      if (!a || !a.text) {
+        errors.push({ bucket: 'new_anecdotes', idx, error: 'text required' });
+        continue;
+      }
+      const prefix = (a.text || '').slice(0, 80).toLowerCase().trim();
+      const existing = db.prepare(`
+        SELECT id FROM anecdotes WHERE person_id=?
+          AND LOWER(SUBSTR(text, 1, 80))=? LIMIT 1
+      `).get(personId, prefix);
+      if (existing) {
+        skipped.push({ bucket: 'new_anecdotes', idx, reason: 'duplicate', existing_id: existing.id });
+        recordItem('new_anecdotes', idx, a, 'skipped_duplicate', existing.id);
+        continue;
+      }
+      try {
+        const id = newId();
+        db.prepare(`INSERT INTO anecdotes (id, person_id, title, text, source, year, created_at)
+          VALUES (?,?,?,?,?,?,?)`)
+          .run(id, personId, a.title || null, a.text, a.source || null, a.year || null, now);
+        recordItem('new_anecdotes', idx, a, 'applied', id);
+        applied++;
+      } catch (err) {
+        errors.push({ bucket: 'new_anecdotes', idx, error: err.message });
+        recordItem('new_anecdotes', idx, a, 'failed');
       }
     }
 

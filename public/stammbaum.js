@@ -3695,6 +3695,9 @@ const AI_BUCKETS = [
   { key: 'new_persons',       title: 'Neue Personen',          empty: 'Keine neuen Personen erkannt.' },
   { key: 'new_edges',         title: 'Neue Beziehungen',       empty: 'Keine neuen Beziehungen erkannt.' },
   { key: 'new_residences',    title: 'Neue Wohnorte',          empty: 'Keine neuen Wohnorte erkannt.' },
+  { key: 'new_jobs',          title: 'Neue Berufsstationen',   empty: 'Keine neuen Berufsstationen.' },
+  { key: 'new_education',     title: 'Neue Ausbildung',        empty: 'Keine neuen Ausbildungs-Einträge.' },
+  { key: 'new_anecdotes',     title: 'Neue Anekdoten',         empty: 'Keine neuen Anekdoten.' },
   { key: 'residence_updates', title: 'Wohnort-Ergänzungen',    empty: 'Keine Wohnort-Ergänzungen.' },
   { key: 'job_updates',       title: 'Beruf-Ergänzungen',      empty: 'Keine Beruf-Ergänzungen.' },
   { key: 'field_updates',     title: 'Feld-Normalisierungen',  empty: 'Keine Feld-Vorschläge.' },
@@ -3749,6 +3752,18 @@ function renderAiItem(bucket, item) {
     const parts = [item.street, item.postal_code, item.city, item.district && `(${item.district})`].filter(Boolean).join(' ');
     wrap.appendChild(h('div', { class: 'ai-title' }, parts || item.place || 'Wohnort'));
     wrap.appendChild(h('div', { class: 'ai-sub' }, [item.region, item.country].filter(Boolean).join(' · ')));
+  } else if (bucket === 'new_jobs') {
+    const title = [item.title, item.employer && `bei ${item.employer}`].filter(Boolean).join(' ');
+    wrap.appendChild(h('div', { class: 'ai-title' }, title || 'Berufsstation'));
+    wrap.appendChild(h('div', { class: 'ai-sub' }, [item.place, [item.start_date, item.end_date].filter(Boolean).join(' – ')].filter(Boolean).join(' · ')));
+  } else if (bucket === 'new_education') {
+    const title = [item.institution, item.field && `· ${item.field}`, item.degree && `(${item.degree})`].filter(Boolean).join(' ');
+    wrap.appendChild(h('div', { class: 'ai-title' }, title || 'Ausbildung'));
+    wrap.appendChild(h('div', { class: 'ai-sub' }, [item.place, [item.start_date, item.end_date].filter(Boolean).join(' – ')].filter(Boolean).join(' · ')));
+  } else if (bucket === 'new_anecdotes') {
+    wrap.appendChild(h('div', { class: 'ai-title' }, item.title || (item.text || '').slice(0, 60)));
+    wrap.appendChild(h('div', { class: 'ai-sub' }, (item.text || '').slice(0, 180)));
+    if (item.source || item.year) wrap.appendChild(h('div', { class: 'ai-hint' }, [item.year, item.source].filter(Boolean).join(' · ')));
   } else if (bucket === 'residence_updates' || bucket === 'job_updates') {
     const patchStr = Object.entries(item.patch || {}).map(([k, v]) => `${k}: ${v}`).join(', ');
     wrap.appendChild(h('div', { class: 'ai-title' }, patchStr));
