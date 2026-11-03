@@ -65,6 +65,13 @@ function buildQueries(person) {
   const queries = new Set();
   // 1) Nackter Name — Baseline
   queries.add(name);
+  // 1b) Titel voranstellen (hochrelevant: "Prof Dr med Michael Radtke"
+  // findet die Fachrichtungs-spezifischen Treffer die der nackte Name
+  // nicht liefert). Punkte raus — Firecrawl indexiert ohne Punkte besser.
+  if (title) {
+    const titleStripped = title.replace(/\./g, '').trim();
+    if (titleStripped) queries.add(`${titleStripped} ${name}`);
+  }
   // 2) Rollen-Keywords (DECISIVE bei datenarmen Personen; Prof. Dr. med.
   // Michael Radtke ohne weitere Daten → Universität/Klinik/Facharzt-Queries)
   for (const kw of roleKw.slice(0, 3)) queries.add(`${name} ${kw}`);
