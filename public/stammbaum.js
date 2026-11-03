@@ -2904,7 +2904,15 @@ function renderHit(hit, personId) {
       ),
     ),
     state.role === 'editor' && (hit.status === 'pending' || !hit.status) ? h('div', { class: 'hit-actions' },
-      btnOutline('✓ Bestätigen', async () => { await api.applyHit(hit.id, 'accept'); await loadResearchHits(personId); }, 'small btn-accept'),
+      btnOutline('✓ Bestätigen', async () => {
+        const r = await api.applyHit(hit.id, 'accept');
+        await loadResearchHits(personId);
+        // Hit-focused review im Payload? → Review-Dialog mit diesen
+        // Vorschlägen öffnen; User bestätigt einzeln.
+        if (r?.review?.review_id && r.review.suggestions) {
+          openAiReviewDialogWithData(personId, r.review);
+        }
+      }, 'small btn-accept'),
       btnOutline('Notiz', async () => { await api.applyHit(hit.id, 'add_source_note'); await loadResearchHits(personId); await reload(); }, 'small'),
       btnOutline('Verwerfen', async () => { await api.applyHit(hit.id, 'dismiss'); await loadResearchHits(personId); }, 'small btn-danger'),
     ) : state.role === 'editor' && hit.status === 'accepted' ? h('div', { class: 'hit-actions' },
@@ -3715,6 +3723,25 @@ function wireCropHandlers() {
 
 /* --- KI-Update Dialog ------------------------------------------------- */
 const _aiReview = { reviewId: null, suggestions: null, personId: null };
+
+// Prefetched variante: wird nach „Bestätigen eines Treffers" aufgerufen, der
+// Server hat die Hit-fokussierte Analyse schon mitgeschickt.
+function openAiReviewDialogWithData(personId, review) {
+  const dlg = document.getElementById('ai-review-dialog');
+  const body = document.getElementById('ai-review-body');
+  const applyBtn = document.getElementById('ai-review-apply');
+  _aiReview.reviewId = review.review_id;
+  _aiReview.suggestions = review.suggestions;
+  _aiReview.personId = personId;
+  wireAiReviewHandlers();
+  dlg.showModal();
+  body.innerHTML = '';
+  const title = h('div', { class: 'ai-hit-source-header' },
+    `Analyse der bestätigten Quelle: ${review.source_hit_title || review.source_hit_id || ''}`);
+  body.appendChild(title);
+  renderAiReviewSuggestions(review.suggestions);
+  applyBtn.disabled = false;
+}
 
 async function openAiReviewDialog(personId) {
   const dlg = document.getElementById('ai-review-dialog');

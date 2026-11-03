@@ -1484,6 +1484,16 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
   padding-top: var(--sp-3);
 }
 .ai-section:first-child { border-top: 0; padding-top: 0; }
+.ai-hit-source-header {
+  padding: var(--sp-2) var(--sp-3);
+  margin-bottom: var(--sp-3);
+  background: color-mix(in oklab, var(--c-accept, #2a7a4b) 10%, var(--surface-raised));
+  border-left: 3px solid var(--c-accept, #2a7a4b);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--ink-soft);
+  font-weight: 500;
+}
 .ai-section-title {
   margin: 0 0 var(--sp-2);
   font-size: 14px;

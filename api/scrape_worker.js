@@ -37,6 +37,25 @@ async function processJob(job) {
   try {
     person.residences = db.prepare('SELECT place, city, region, country FROM residences WHERE person_id=?').all(job.person_id);
   } catch { person.residences = []; }
+  // Related cities (neighbors' places) for query expansion when person has no residences.
+  try {
+    const neighborIds = db.prepare(`
+      SELECT DISTINCT CASE WHEN from_id=? THEN to_id ELSE from_id END AS pid
+      FROM edges WHERE (from_id=? OR to_id=?) AND type IN ('parent','spouse')
+    `).all(job.person_id, job.person_id, job.person_id).map(r => r.pid);
+    const cities = new Set();
+    for (const pid of neighborIds.slice(0, 8)) {
+      const bp = db.prepare('SELECT birth_place, death_place FROM persons WHERE id=?').get(pid);
+      if (bp?.birth_place) cities.add(bp.birth_place.split(',')[0].trim());
+      if (bp?.death_place) cities.add(bp.death_place.split(',')[0].trim());
+      const rs = db.prepare('SELECT city, place FROM residences WHERE person_id=? LIMIT 3').all(pid);
+      for (const r of rs) {
+        const c = (r.city || r.place || '').split(',')[0].trim();
+        if (c) cities.add(c);
+      }
+    }
+    person.related_cities = Array.from(cities).filter(Boolean).slice(0, 6);
+  } catch { person.related_cities = []; }
   try {
     const vrows = db.prepare(`SELECT source, url, title, snippet, payload FROM research_hits
       WHERE person_id=? AND status IN ('accepted','applied','imported') ORDER BY created_at DESC LIMIT 20`).all(job.person_id);

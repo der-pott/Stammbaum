@@ -20,10 +20,32 @@ const SCRAPE_TIMEOUT = 10_000;
 // Login-Walls — Snippet reicht, nicht scrapen.
 const NO_SCRAPE_HOSTS = /(?:^|\.)(facebook\.com|instagram\.com|twitter\.com|x\.com|linkedin\.com|xing\.com|tiktok\.com)$/i;
 
+// Role-Keyword-Map: wenn die Person wenig strukturierte Daten hat, hilft
+// der Titel bei der Query-Expansion. Firecrawl's Index chokt bei quoted
+// Full-Name-Queries ("Michael Radtke" → 0 hits), aber findet die relevanten
+// Treffer sobald ein Rollen-Keyword mit drinsteht.
+function roleKeywords(title) {
+  const t = (title || '').toLowerCase();
+  const kw = [];
+  if (/prof/.test(t)) kw.push('Universität', 'Professor', 'Lehrstuhl');
+  if (/dr\.?\s*med/.test(t) || /\bmd\b/.test(t)) kw.push('Facharzt', 'Klinik', 'Praxis', 'Chefarzt', 'Oberarzt');
+  else if (/dr\.?\s*(ing|rer|phil|jur|iur|theol)/.test(t)) kw.push('Universität', 'Forschung', 'Publikation');
+  else if (/\bdr\.?\b/.test(t)) kw.push('Praxis', 'Kanzlei');
+  if (/pfarr|pastor|priester/.test(t)) kw.push('Gemeinde', 'Kirche');
+  if (/richter|rechtsanw|notar/.test(t)) kw.push('Gericht', 'Kanzlei');
+  if (/ingenieur|dipl.-ing/.test(t)) kw.push('Ingenieur', 'Firma');
+  return kw;
+}
+
 function buildQueries(person) {
   const { full, firstGiven, surname } = nameParts(person);
   if (!full) return [];
-  const name = `"${full}"`;
+  // Firecrawl Index: Quotes um Full-Name killen Trefferzahl (siehe Test
+  // 2026-11-03: `"Michael Radtke" Rostock` → 0 hits, `Michael Radtke
+  // Hautklinik Rostock` → 8 hits inkl. cpr.uni-rostock.de). Nackte Namen
+  // bevorzugen; nur Quotes bei auffälligen Mehrfach-Vornamen setzen.
+  const nameTokens = full.split(/\s+/).filter(Boolean);
+  const name = nameTokens.length >= 4 ? `"${firstGiven} ${surname}"` : full;
   const birthPlace = (person.birth_place || '').trim();
   const deathPlace = (person.death_place || '').trim();
   const title = (person.title || '').trim();
@@ -32,34 +54,45 @@ function buildQueries(person) {
   const residences = (person.residences || [])
     .map(r => (r.city || r.place || '').split(',')[0].trim())
     .filter(Boolean);
+  // Edge-Städte: wenn Person keine eigenen Residenzen hat, aber verwandte
+  // Personen welche haben, nutze deren Städte als Proxy. Wird vom Caller
+  // (server.js / scrape_worker.js) als person.related_cities übergeben.
+  const relatedCities = (person.related_cities || []).filter(Boolean);
   const jobs = (person.jobs || []).filter(j => j.title || j.employer);
   const education = (person.education || []).filter(e => e.institution);
+  const roleKw = roleKeywords(title);
 
   const queries = new Set();
+  // 1) Nackter Name — Baseline
   queries.add(name);
+  // 2) Rollen-Keywords (DECISIVE bei datenarmen Personen; Prof. Dr. med.
+  // Michael Radtke ohne weitere Daten → Universität/Klinik/Facharzt-Queries)
+  for (const kw of roleKw.slice(0, 3)) queries.add(`${name} ${kw}`);
+  // 3) Rollen-Keyword + Ort kombiniert (höchste Treffsicherheit)
+  const anyCity = birthPlace || residences[0] || relatedCities[0] || '';
+  if (anyCity && roleKw[0]) queries.add(`${name} ${roleKw[0]} ${anyCity}`);
+  // 4) Orte
   if (birthPlace) queries.add(`${name} ${birthPlace}`);
   if (deathPlace && deathPlace !== birthPlace) queries.add(`${name} ${deathPlace}`);
-  if (title) queries.add(`${name} ${title}`);
+  for (const city of residences.slice(0, 2)) queries.add(`${name} ${city}`);
+  for (const city of relatedCities.slice(0, 2)) queries.add(`${name} ${city}`);
+  // 5) Jahre
   if (birth) queries.add(`${name} ${birth}`);
   if (death) {
     queries.add(`${name} Nachruf`);
     queries.add(`${name} Traueranzeige`);
-    queries.add(`${name} verstorben ${death}`);
   }
-  for (const city of residences.slice(0, 3)) queries.add(`${name} ${city}`);
+  // 6) Berufliches
   for (const j of jobs.slice(0, 2)) {
     if (j.employer) queries.add(`${name} ${j.employer}`);
-    if (j.title && j.employer) queries.add(`"${j.title}" "${j.employer}" ${firstGiven} ${surname}`);
   }
-  for (const e of education.slice(0, 2)) {
+  for (const e of education.slice(0, 1)) {
     if (e.institution) queries.add(`${name} ${e.institution}`);
   }
-  // Generic dossier queries that often surface bios, articles, interviews.
+  // 7) Generische Dossier-Queries (nur wenn andere queries schon da sind)
   queries.add(`${name} Biografie`);
-  queries.add(`${name} Lebenslauf`);
-  // Cap at 6 queries. Firecrawl self-hosted läuft über diese Schwelle in
-  // Rate-Caps und droppt still.
-  return Array.from(queries).slice(0, 6);
+  // Cap bei 8 (Firecrawl Rate-Cap sequentiell x 1500ms = 12s pro Lauf)
+  return Array.from(queries).slice(0, 8);
 }
 
 async function runSingleQuery(q) {

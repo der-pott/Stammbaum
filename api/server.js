@@ -1356,6 +1356,26 @@ app.post('/api/persons/:id/research/scrape-source/:key', requireEditor, aiLimite
   try { person.jobs = db.prepare('SELECT title, employer, place FROM jobs WHERE person_id=?').all(req.params.id); } catch { person.jobs = []; }
   try { person.education = db.prepare('SELECT institution, field, place FROM education WHERE person_id=?').all(req.params.id); } catch { person.education = []; }
   try { person.residences = db.prepare('SELECT place, city, region, country FROM residences WHERE person_id=?').all(req.params.id); } catch { person.residences = []; }
+  // Related cities: wenn Person selbst keine Residenzen hat, nutze Städte
+  // der Eltern/Ehepartner/Kinder als Proxy-Lokation für Query-Expansion.
+  try {
+    const neighborIds = db.prepare(`
+      SELECT DISTINCT CASE WHEN from_id=? THEN to_id ELSE from_id END AS pid
+      FROM edges WHERE (from_id=? OR to_id=?) AND type IN ('parent','spouse')
+    `).all(req.params.id, req.params.id, req.params.id).map(r => r.pid);
+    const cities = new Set();
+    for (const pid of neighborIds.slice(0, 8)) {
+      const bp = db.prepare('SELECT birth_place, death_place FROM persons WHERE id=?').get(pid);
+      if (bp?.birth_place) cities.add(bp.birth_place.split(',')[0].trim());
+      if (bp?.death_place) cities.add(bp.death_place.split(',')[0].trim());
+      const rs = db.prepare('SELECT city, place FROM residences WHERE person_id=? LIMIT 3').all(pid);
+      for (const r of rs) {
+        const c = (r.city || r.place || '').split(',')[0].trim();
+        if (c) cities.add(c);
+      }
+    }
+    person.related_cities = Array.from(cities).filter(Boolean).slice(0, 6);
+  } catch { person.related_cities = []; }
   try {
     const vrows = db.prepare(`SELECT source, url, title, snippet, payload FROM research_hits
       WHERE person_id=? AND status IN ('accepted','applied','imported') ORDER BY created_at DESC LIMIT 20`).all(req.params.id);
@@ -1401,7 +1421,7 @@ app.get('/api/persons/:id/research/hits', requireViewer, (req, res) => {
   res.json(rows.map(r => ({ ...r, payload: safeJson(r.payload) })));
 });
 
-app.post('/api/research/hits/:id/apply', requireEditor, (req, res) => {
+app.post('/api/research/hits/:id/apply', requireEditor, async (req, res) => {
   const hit = db.prepare('SELECT * FROM research_hits WHERE id=?').get(req.params.id);
   if (!hit) return res.status(404).json({ error: 'hit not found' });
   const action = String(req.body?.action || '').trim();
@@ -1424,8 +1444,68 @@ app.post('/api/research/hits/:id/apply', requireEditor, (req, res) => {
   if (action === 'accept') newStatus = 'accepted';
   db.prepare('UPDATE research_hits SET status=? WHERE id=?').run(newStatus, req.params.id);
   logAudit(req.auth.role, `research.${action}`, req.params.id);
-  res.json({ id: req.params.id, status: newStatus });
+
+  // Hit-focused AI review: wenn der User einen Treffer bestätigt und
+  // der Treffer einen Volltext (markdown) im payload trägt → sofort einen
+  // fokussierten Claude-Call starten, der NUR diese eine Quelle gründlich
+  // ausliest und Fakten (Ausbildung, Berufe, Residenzen, Eltern etc.) als
+  // Vorschläge extrahiert. Die Vorschläge landen im bestehenden
+  // ai_reviews-Modell und werden vom User im Review-Modal einzeln bestätigt.
+  let review = null;
+  if (action === 'accept' && anthropic && hit.person_id) {
+    try {
+      const payload = JSON.parse(hit.payload || 'null');
+      const md = payload?.markdown;
+      if (md && md.length >= 300) {
+        review = await runHitFocusedReview(hit, md);
+      }
+    } catch (err) {
+      console.error('[hit-focused-review] failed:', err?.message);
+    }
+  }
+
+  res.json({ id: req.params.id, status: newStatus, review });
 });
+
+async function runHitFocusedReview(hit, markdown) {
+  const ctx = gatherBioContext(hit.person_id);
+  if (!ctx) return null;
+  // Replace web content with ONLY this one accepted hit; verified_facts stays
+  // (so cross-source consistency still applies).
+  ctx.webContent = [{
+    source: hit.source,
+    url: hit.url,
+    title: hit.title,
+    confidence: hit.confidence,
+    markdown: markdown.slice(0, 10_000),
+  }];
+  ctx.webSnippets = [];
+  const register = db.prepare(`SELECT id, given_name, surname, birth_name, birth_date
+    FROM persons WHERE id != ? ORDER BY surname, given_name`).all(hit.person_id);
+  const processed = db.prepare(`SELECT i.category, i.status, i.summary, i.applied_at
+    FROM ai_review_items i JOIN ai_reviews r ON r.id = i.review_id
+    WHERE r.person_id=? AND i.status IN ('applied','skipped_duplicate')
+    ORDER BY i.applied_at DESC LIMIT 60`).all(hit.person_id);
+  const result = await runReview(anthropic, ctx, register, processed);
+  const now = nowIso();
+  const reviewId = newId();
+  // Context-hash includes the hit id so the hit-review stays distinct from
+  // the general ai-review cache.
+  const ctxHash = 'hit:' + hit.id;
+  db.prepare(`INSERT INTO ai_reviews (id, person_id, suggestions, status, model, context_hash, created_at)
+    VALUES (?,?,?,?,?,?,?)`)
+    .run(reviewId, hit.person_id, JSON.stringify(result.suggestions), 'pending', result.model, ctxHash, now);
+  logAudit('editor', 'ai_review.hit_focused', hit.person_id);
+  return {
+    review_id: reviewId,
+    person_id: hit.person_id,
+    suggestions: result.suggestions,
+    model: result.model,
+    source_hit_id: hit.id,
+    source_hit_title: hit.title,
+    created_at: now,
+  };
+}
 
 function safeJson(s) { try { return JSON.parse(s || 'null'); } catch { return null; } }
 
