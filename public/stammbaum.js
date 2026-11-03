@@ -262,12 +262,13 @@ async function logout() {
 
 /* --- Helpers -------------------------------------------------------- */
 function nameOf(p) {
-  const parts = [p.given_name, p.surname].filter(Boolean);
+  const parts = [p.title, p.given_name, p.surname].filter(Boolean);
   return parts.join(' ') || '(ohne Namen)';
 }
 function primaryNameOf(p) {
   const nick = (p.nicknames || '').split(',')[0]?.trim();
-  if (nick && nick !== p.given_name) return [nick, p.surname].filter(Boolean).join(' ');
+  const title = p.title || '';
+  if (nick && nick !== p.given_name) return [title, nick, p.surname].filter(Boolean).join(' ');
   return nameOf(p);
 }
 function fullNameOf(p) { return nameOf(p); }
@@ -1337,30 +1338,117 @@ function computeLayout() {
   }
   const finalMaxY = Math.max(...nodes.map(n => n.y + n.h));
 
-  const totalW = maxX2 + marginR;
-  const totalH = finalMaxY + marginB;
-
-  // --- Overlap guard (collision detection) ----------------------------
-  // Scan all placed nodes for axis-aligned bbox overlaps. Nodes include
-  // the avatar circle plus the name/date label block below. We approximate
-  // the label height with a conservative 3-line estimate so wrapped names
-  // don't collide with the row below either.
+  // Label-footprint constants — reused by resolver + guard.
   const LABEL_LINES_EST = 3;
   const LINE_H = 18;
+  const MIN_GAP_X = 20;
+
+  // --- Overlap resolver -----------------------------------------------
+  // Rules place subtrees cleanly most of the time, but corner cases
+  // (cross-tree marital anchors, deep forced-satellite subtrees, dense
+  // generations) can still leave bbox collisions. This resolver performs
+  // bounded horizontal spreading AFTER the primary layout:
+  //   1. Per generation row: sweep left→right, enforce MIN_GAP_X.
+  //   2. Cross-row: detect label-into-next-row collisions and nudge the
+  //      lower-row node sideways out of the upper label's x-range.
+  // We only move horizontally — vertical is semantic (generations).
+  function nodesCollide(a, b) {
+    const aBottom = a.y + a.h + LABEL_LINES_EST * LINE_H;
+    const bBottom = b.y + b.h + LABEL_LINES_EST * LINE_H;
+    const aRight = a.x + a.w, bRight = b.x + b.w;
+    if (a.x >= bRight || b.x >= aRight) return false;
+    if (a.y >= bBottom || b.y >= aBottom) return false;
+    return true;
+  }
+  const yTol = 20;
+  function groupRows(ns) {
+    const rows = new Map();
+    for (const n of ns) {
+      const key = Math.round(n.y / yTol);
+      if (!rows.has(key)) rows.set(key, []);
+      rows.get(key).push(n);
+    }
+    return rows;
+  }
+  function shiftNode(n, dx) {
+    n.x += dx; n.cx += dx;
+  }
+  const MAX_ITER = 25;
+  for (let iter = 0; iter < MAX_ITER; iter++) {
+    let changed = false;
+    // Phase 1: per-row horizontal sweep
+    const rows = groupRows(nodes);
+    for (const row of rows.values()) {
+      row.sort((a, b) => a.x - b.x);
+      for (let i = 1; i < row.length; i++) {
+        const prev = row[i - 1], cur = row[i];
+        const minX = prev.x + prev.w + MIN_GAP_X;
+        if (cur.x < minX) {
+          const dx = minX - cur.x;
+          for (let k = i; k < row.length; k++) shiftNode(row[k], dx);
+          changed = true;
+        }
+      }
+    }
+    // Phase 2: cross-row label collisions. For each pair where a.label
+    // bottom overlaps b vertically AND their x-ranges overlap, push the
+    // LOWER node (b, which is in the deeper row) horizontally away from
+    // the upper label's x-center. If they share the same row, phase 1 handles it.
+    const pairsToFix = [];
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        if (nodesCollide(nodes[i], nodes[j])) {
+          const [upper, lower] = nodes[i].y <= nodes[j].y ? [nodes[i], nodes[j]] : [nodes[j], nodes[i]];
+          if (Math.abs(upper.y - lower.y) < yTol) continue; // same row
+          pairsToFix.push({ upper, lower });
+        }
+      }
+    }
+    for (const { upper, lower } of pairsToFix) {
+      // Decide push direction: whichever side moves the lower node further
+      // from the upper label's horizontal extent needs less displacement.
+      const pushRight = (upper.x + upper.w + MIN_GAP_X) - lower.x;
+      const pushLeft  = (upper.x - MIN_GAP_X) - (lower.x + lower.w);
+      let dx = 0;
+      if (pushRight > 0 && (pushLeft >= 0 || pushRight < -pushLeft)) dx = pushRight;
+      else if (pushLeft < 0) dx = pushLeft;
+      if (dx === 0) continue;
+      shiftNode(lower, dx);
+      changed = true;
+    }
+    if (!changed) break;
+  }
+
+  // Re-sync slotPos from node positions: anchor and sat x-centers
+  // changed, parent-connector routing depends on them.
+  for (const [anchorId, pos] of slotPos) {
+    const anchorNode = posById.get(anchorId);
+    if (!anchorNode) continue;
+    const dx = anchorNode.cx - pos.anchorCx;
+    pos.anchorCx = anchorNode.cx;
+    pos.slotLeftX = (pos.slotLeftX ?? pos.anchorCx) + dx;
+    for (const [satId] of pos.satCx) {
+      const satNode = posById.get(satId);
+      if (satNode) pos.satCx.set(satId, satNode.cx);
+    }
+  }
+
+  // Recompute total width from new maxX
+  const newMaxX2 = Math.max(...nodes.map(n => n.x + n.w));
+  const totalW = Math.max(maxX2, newMaxX2) + marginR;
+  const totalH = finalMaxY + marginB;
+
+  // --- Overlap guard (post-resolver sanity check) ---------------------
   const overlaps = [];
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
-      const a = nodes[i], b = nodes[j];
-      const aBottom = a.y + a.h + LABEL_LINES_EST * LINE_H;
-      const bBottom = b.y + b.h + LABEL_LINES_EST * LINE_H;
-      const aRight = a.x + a.w, bRight = b.x + b.w;
-      if (a.x >= bRight || b.x >= aRight) continue;      // x-separate
-      if (a.y >= bBottom || b.y >= aBottom) continue;    // y-separate
-      overlaps.push({ a: a.id, b: b.id, aName: primaryNameOf(a.person), bName: primaryNameOf(b.person) });
+      if (nodesCollide(nodes[i], nodes[j])) {
+        overlaps.push({ a: nodes[i].id, b: nodes[j].id, aName: primaryNameOf(nodes[i].person), bName: primaryNameOf(nodes[j].person) });
+      }
     }
   }
   if (overlaps.length) {
-    console.warn(`[layout] ${overlaps.length} node overlap(s) detected:`, overlaps.slice(0, 10));
+    console.warn(`[layout] ${overlaps.length} residual overlap(s) after resolver:`, overlaps.slice(0, 10));
   }
 
   return {
@@ -2107,10 +2195,10 @@ function renderDetail() {
   const famSection = h('div', { class: 'section dossier-section' },
     h('h3', {}, 'Familie'),
     h('div', { class: 'family-grid' },
-      familyGroup('Eltern', parents),
+      familyGroup('Eltern', parents, { kind: 'parent', personId: p.id }),
       familyGroup('Ehepartner', spouses.map(s => s.p), { kind: 'spouse', personId: p.id }),
-      familyGroup('Geschwister', siblings),
-      familyGroup('Kinder', children),
+      familyGroup('Geschwister', siblings, { kind: 'sibling', personId: p.id }),
+      familyGroup('Kinder', children, { kind: 'child', personId: p.id }),
     ),
   );
   el.appendChild(famSection);
@@ -2200,6 +2288,9 @@ function yearRange(p) {
 function familyGroup(title, people, opts = {}) {
   if (!people.length) return h('div');
   const isSpouse = opts.kind === 'spouse';
+  const isParent = opts.kind === 'parent';
+  const isChild  = opts.kind === 'child';
+  const canUnlink = state.role === 'editor' && (isSpouse || isParent || isChild);
   const wrap = h('div', { class: 'family-col' },
     h('div', { class: 'family-title' }, title),
   );
@@ -2224,19 +2315,46 @@ function familyGroup(title, people, opts = {}) {
     );
     card.onclick = () => select(x.id);
     const row = h('div', { class: 'family-card-row' }, card);
-    if (isSpouse && state.role === 'editor') {
-      const edge = findSpouseEdge(opts.personId, x.id);
+    if (canUnlink) {
+      const edge = isSpouse ? findSpouseEdge(opts.personId, x.id)
+        : isParent ? findParentEdge(x.id, opts.personId)
+        : /* isChild */ findParentEdge(opts.personId, x.id);
       if (edge) {
-        const edit = h('button', { class: 'family-card-edit', title: 'Beziehung bearbeiten', 'aria-label': 'Beziehung bearbeiten' });
-        edit.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M4 20h4L20 8l-4-4L4 16v4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
-        edit.onclick = (ev) => { ev.stopPropagation(); openEdgeDialog(edge); };
-        row.appendChild(edit);
+        if (isSpouse) {
+          const edit = h('button', { class: 'family-card-edit', title: 'Beziehung bearbeiten', 'aria-label': 'Beziehung bearbeiten' });
+          edit.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M4 20h4L20 8l-4-4L4 16v4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
+          edit.onclick = (ev) => { ev.stopPropagation(); openEdgeDialog(edge); };
+          row.appendChild(edit);
+        }
+        const del = h('button', { class: 'family-card-del', title: 'Beziehung entfernen', 'aria-label': 'Beziehung entfernen' });
+        del.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v6M14 11v6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        del.onclick = async (ev) => {
+          ev.stopPropagation();
+          const kindLabel = isSpouse ? 'Ehe' : isParent ? 'Eltern-Beziehung' : 'Eltern-Beziehung';
+          const subj = isSpouse
+            ? `${primaryNameOf(x)} als Ehepartner`
+            : isParent
+              ? `${primaryNameOf(x)} als Elternteil`
+              : `${primaryNameOf(x)} als Kind`;
+          if (!confirm(`${kindLabel} entfernen?\n${subj}\n\nDie Personen bleiben bestehen, nur die Verknüpfung wird gelöscht.`)) return;
+          try {
+            await api.removeEdge(edge.id);
+            await reload();
+          } catch (e) { alert('Fehler: ' + e.message); }
+        };
+        row.appendChild(del);
       }
     }
     cards.appendChild(row);
   }
   wrap.appendChild(cards);
   return wrap;
+}
+
+function findParentEdge(parentId, childId) {
+  return state.edges.find(e =>
+    e.type === 'parent' && e.from_id === parentId && e.to_id === childId
+  );
 }
 
 /* --- historical context --------------------------------------------- */

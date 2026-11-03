@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&display=swap">
-  <link rel="stylesheet" href="styles.css?v=34">
+  <link rel="stylesheet" href="styles.css?v=35">
 </head>
 <body>
 
@@ -148,6 +148,30 @@
       <label class="field"><span>Nachname</span><input name="surname" maxlength="200"></label>
       <label class="field"><span>Geburtsname</span><input name="birth_name" maxlength="200"></label>
       <label class="field"><span>Rufname(n)</span><input name="nicknames" maxlength="200" placeholder="z. B. Max, Maximilian"></label>
+      <label class="field">
+        <span>Titel</span>
+        <input name="title" maxlength="80" placeholder="z. B. Dr., Prof. Dr., Dipl.-Ing." list="title-suggestions">
+        <datalist id="title-suggestions">
+          <option value="Dr.">
+          <option value="Prof.">
+          <option value="Prof. Dr.">
+          <option value="Prof. Dr. med.">
+          <option value="Dr. med.">
+          <option value="Dr. phil.">
+          <option value="Dr. jur.">
+          <option value="Dr. rer. nat.">
+          <option value="Dipl.-Ing.">
+          <option value="Dipl.-Kfm.">
+          <option value="M.A.">
+          <option value="M.Sc.">
+          <option value="B.A.">
+          <option value="B.Sc.">
+          <option value="Pfarrer">
+          <option value="Pastor">
+          <option value="Dr. Dr.">
+          <option value="Prof. em.">
+        </datalist>
+      </label>
       <label class="field">
         <span>Geschlecht</span>
         <select name="gender">
@@ -356,6 +380,6 @@
 
 <div id="toasts" class="toasts" aria-live="polite"></div>
 
-<script src="stammbaum.js?v=55" defer></script>
+<script src="stammbaum.js?v=56" defer></script>
 </body>
 </html>

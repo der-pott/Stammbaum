@@ -43,7 +43,7 @@ const COOKIE_OPTS = {
 };
 
 const PERSON_FIELDS = [
-  'given_name','surname','birth_name','nicknames','gender',
+  'given_name','surname','birth_name','nicknames','title','gender',
   'birth_date','birth_place','death_date','death_place','notes',
   'birth_date_precision','death_date_precision',
 ];
@@ -275,14 +275,14 @@ app.post('/api/persons', requireEditor, (req, res) => {
   const id = newId();
   const now = nowIso();
   db.prepare(`
-    INSERT INTO persons (id, given_name, surname, birth_name, nicknames, gender,
+    INSERT INTO persons (id, given_name, surname, birth_name, nicknames, title, gender,
       birth_date, birth_date_precision, birth_place, death_date, death_date_precision, death_place,
       notes, created_at, updated_at)
-    VALUES (@id,@given_name,@surname,@birth_name,@nicknames,@gender,
+    VALUES (@id,@given_name,@surname,@birth_name,@nicknames,@title,@gender,
       @birth_date,@birth_date_precision,@birth_place,@death_date,@death_date_precision,@death_place,
       @notes,@created_at,@updated_at)
   `).run({
-    id, given_name:null, surname:null, birth_name:null, nicknames:null, gender:null,
+    id, given_name:null, surname:null, birth_name:null, nicknames:null, title:null, gender:null,
     birth_date:null, birth_date_precision:'EXACT',
     birth_place:null, death_date:null, death_date_precision:'EXACT', death_place:null, notes:null,
     ...data, created_at: now, updated_at: now,
@@ -1137,7 +1137,7 @@ app.post('/api/ai-reviews/:review_id/apply', requireEditor, (req, res) => {
     // 6) field_updates — Race-Condition-Check: 'current' muss match
     for (const idx of (accepted.field_updates || [])) {
       const u = suggestions.field_updates?.[idx];
-      const allowed = ['given_name','surname','birth_name','nicknames','gender','birth_date','birth_place','death_date','death_place','notes'];
+      const allowed = ['given_name','surname','birth_name','nicknames','title','gender','birth_date','birth_place','death_date','death_place','notes'];
       if (!u?.field || !allowed.includes(u.field) || u.suggested === undefined) {
         errors.push({ bucket: 'field_updates', idx, error: 'invalid field' });
         continue;

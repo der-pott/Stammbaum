@@ -246,6 +246,9 @@ const existingCols = new Set(db.prepare('PRAGMA table_info(persons)').all().map(
 if (!existingCols.has('nicknames')) {
   db.exec('ALTER TABLE persons ADD COLUMN nicknames TEXT');
 }
+if (!existingCols.has('title')) {
+  db.exec('ALTER TABLE persons ADD COLUMN title TEXT');
+}
 
 // edges.status — marriage lifecycle. Default null (treated as 'married' for backward compat).
 // Valid values: 'married', 'divorced', 'widowed', 'engaged', 'partner'.

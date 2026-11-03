@@ -614,6 +614,21 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
 .family-card-row:hover .family-card-edit { opacity: 1; }
 .family-card-edit:hover { background: var(--accent-soft); }
 
+.family-card-del {
+  position: absolute; top: 6px; right: 36px;
+  width: 24px; height: 24px; border-radius: 999px;
+  color: var(--err);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  display: grid; place-items: center;
+  opacity: 0; transition: opacity 0.15s, background 0.15s;
+  z-index: 2;
+}
+/* If only del (no edit for parent/child), move del to top-right */
+.family-card-row > .family-card-del:not(:nth-child(3)) { right: 6px; }
+.family-card-row:hover .family-card-del { opacity: 1; }
+.family-card-del:hover { background: color-mix(in srgb, var(--err) 15%, var(--paper)); }
+
 /* Context list */
 .ctx-list { list-style: none; margin: 0; padding: 0; }
 .ctx-list li {
