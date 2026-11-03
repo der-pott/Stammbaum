@@ -322,14 +322,15 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 500; letter-spacing:
   opacity: 0.85;
 }
 /* Cross-tree Ehe-Bogen zwischen zwei eigenständigen Anchors.
- * Solid wie Inline-Ehe — nur minimal reduzierte Opazität zur Entzerrung
- * dichter Darstellungen. Keine Strichelung mehr: alle echten Ehen sind
- * gleichwertig, egal welche Sippe. */
+ * Visuell zurücktretend damit lange Boegen nicht als Hauptkreuzung
+ * wirken: duenn, strichliert, reduzierte Opazitaet. Beziehung bleibt
+ * sichtbar, erzeugt aber kein optisches "Kreuz". */
 .edge-spouse-remote {
   fill: none;
   stroke: var(--seal);
-  stroke-width: 1.2;
-  opacity: 0.75;
+  stroke-width: 0.9;
+  stroke-dasharray: 4 4;
+  opacity: 0.35;
 }
 .edge-heart,
 .edge-glyph {
